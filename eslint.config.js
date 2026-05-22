@@ -1,45 +1,41 @@
 /**
- * @file eslint.config.js
- * @description Configuración flat de ESLint para coco-app. Conserva las reglas
- * de estilo del cocowiki (semi, quotes, eqeqeq, no-var, jsdoc) y añade reglas
- * ESTRUCTURALES que protegen la arquitectura hexagonal con vertical slicing:
+ * @file eslint.config.js (workspace root)
+ * @description Configuración flat ESLint para el monorepo coco-app. Aplica
+ * reglas estructurales que protegen la arquitectura hexagonal con vertical
+ * slicing y los límites entre packages:
  *
- *   1. Solo `app/contexts/<slice>/infrastructure/` y `app/platform/db/` pueden
- *      importar `@prisma/client` o `~/platform/db/prisma.server`. Esto evita que
- *      la lógica de dominio dependa directamente del ORM.
- *
- *   2. Slices NO se importan entre sí por sus `infrastructure/`. Cross-slice
- *      solo está permitido por la API pública (`~/contexts/<slice>` sin sub-path
- *      o `~/contexts/<slice>/application/`).
- *
- *   3. Las rutas de RR (`app/routes/`) no pueden importar directamente de
- *      `infrastructure/` — deben pasar por `application/` (los use-cases).
- *
- *   4. Componentes UI (`app/shared/ui/`) no pueden importar de slices o platform
- *      (excepción: types compartidos).
+ *   1. Solo `packages/db/**` puede importar `@prisma/client`.
+ *   2. Solo `apps/web/app/contexts/<slice>/infrastructure/` y `packages/db/**`
+ *      pueden importar el cliente Prisma vía `@coco/db`.
+ *   3. Slices NO se importan entre sí por sus `infrastructure/`. Cross-slice
+ *      solo está permitido por la API pública (`~/contexts/<slice>`).
+ *   4. Routes (`apps/web/app/routes/`) no importan directamente de
+ *      `infrastructure/` — deben pasar por `application/` (use-cases).
+ *   5. `apps/web/app/shared/ui/**` no toca slices ni platform ni packages
+ *      excepto `@coco/ui-kit`.
+ *   6. `apps/web/app/routes/_app/**` y `apps/web/app/shared/ui/**` NO pueden
+ *      llamar `apiRequest` ni `fetch('/api/...')` — toda data interna pasa por
+ *      loaders/actions de RR7.
+ *   7. `packages/ui-kit/**` no toca apps/* ni packages/{db,contracts,scheduler,integrations}.
  */
-
-import { dirname } from "node:path";
-import { fileURLToPath } from "node:url";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
 
 /** @type {import("eslint").Linter.Config[]} */
 export default [
   // ─── Base: ignores ───────────────────────────────────────────────────────
   {
     ignores: [
-      "node_modules/**",
-      "build/**",
-      ".react-router/**",
-      "dist/**",
-      "coverage/**",
-      "prisma/migrations/**",
-      "app/_legacy-*/**",
-      "_legacy-*",
-      "openapi/**",
-      "cypress/**",
+      "**/node_modules/**",
+      "**/build/**",
+      "**/.react-router/**",
+      "**/dist/**",
+      "**/coverage/**",
+      "packages/db/prisma/migrations/**",
+      "apps/web/app/_legacy-*/**",
+      "**/_legacy-*",
+      "apps/web/openapi/**",
+      "apps/web/cypress/**",
+      "packages/contracts/src/m1.ts",
+      "packages/contracts/src/m2.ts",
     ],
   },
 
@@ -57,7 +53,7 @@ export default [
       },
     },
     rules: {
-      "no-var": "warn",
+      "no-var": "error",
       "prefer-const": "warn",
       eqeqeq: ["warn", "smart"],
       "no-console": ["warn", { allow: ["error", "warn", "info"] }],
@@ -67,24 +63,43 @@ export default [
     },
   },
 
-  // ─── Absolute path imports only — no `../../` cross-folder ─────────────
-  // En coco-app TODO import cross-folder usa el alias `~/*`. Esto:
-  //   - Hace el código robusto a refactors de carpetas (mover un slice no rompe imports).
-  //   - Hace evidente cuando un archivo cruza el límite de su slice/layer.
-  //   - Trabaja con la regla de no-fuga de Prisma (la regex pattern matchea bien).
-  // Se permite `./X` (intra-folder) y `../X` (un solo nivel arriba, intra-package),
-  // pero NO `../../X` o `../../../X`.
+  // ─── Imports ABSOLUTOS puros en apps/web/app ─────────────────────────────
+  // Prohibido cualquier `./X` o `../X`. Todo usa `~/...` (apps/web/app),
+  // `@coco/*` (workspace packages), o paquetes npm. Esto hace los archivos
+  // robustos a refactors de carpetas y obvio cuando un archivo cruza límites.
   {
-    files: ["app/**/*.{js,ts,tsx}"],
+    files: ["apps/web/app/**/*.{js,ts,tsx}"],
     rules: {
       "no-restricted-imports": [
         "error",
         {
           patterns: [
             {
-              group: ["../../*", "../../../*", "../../../../*"],
+              group: ["./*", "../*", "../../*", "../../../*", "../../../../*"],
               message:
-                "Imports cross-folder deben usar el alias absoluto `~/`. Ejemplo: `import { foo } from '~/platform/db/prisma.server'` en lugar de `'../../../platform/db/prisma.server'`.",
+                "Imports relativos prohibidos en apps/web/app. Usa `~/...` para archivos internos del web app o `@coco/*` para workspace packages.",
+            },
+          ],
+        },
+      ],
+    },
+  },
+
+  // ─── Imports ABSOLUTOS puros en packages/*/src ───────────────────────────
+  // Mismo principio que apps/web: nada de `./X` ni `../X`. Cada package
+  // expone un internal alias `#/*` que apunta a su `./src/*` (vía
+  // `package.json#imports`). Cross-package usa `@coco/*`.
+  {
+    files: ["packages/*/src/**/*.{js,ts,tsx}"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              group: ["./*", "../*", "../../*", "../../../*", "../../../../*"],
+              message:
+                "Imports relativos prohibidos en packages/*/src. Usa el alias interno `#/...` (definido en package.json#imports) o `@coco/*` para cross-package.",
             },
           ],
         },
@@ -93,44 +108,11 @@ export default [
   },
 
   // ─── Anti-fuga de Prisma ────────────────────────────────────────────────
-  // @prisma/client y el cliente extendido solo deben usarse desde:
-  //   - app/contexts/<slice>/infrastructure/**
-  //   - app/platform/db/**
-  //   - prisma/** (seeds, migrations helpers)
-  //
-  // Grandfathered (legacy services copiados del backend que aún usan prisma
-  // inline en application/). Ver CLEANUP_PLAN.md para roadmap de extracción.
-  // Cualquier archivo NUEVO en application/ que necesite prisma debe extraer
-  // a un modelo en infrastructure/ antes de mergear.
+  // @prisma/client SOLO se importa desde packages/db/**.
+  // El cliente y tenant context se exponen vía @coco/db.
   {
-    files: ["app/**/*.{js,ts,tsx}"],
-    ignores: [
-      "app/contexts/*/infrastructure/**",
-      "app/platform/db/**",
-      // ── Legacy services grandfathered (heredan prisma inline del backend
-      //    legacy). Refactor pendiente — extraer queries a infrastructure/.
-      //    Lista completa con plan de refactor en CLEANUP_PLAN.md.
-      //    Cualquier archivo nuevo en application/ que use prisma se rechaza.
-      "app/contexts/accounts-payable/application/accountingExportService.js",
-      "app/contexts/accounts-payable/application/anticipoPolizaLifecycleService.js",
-      // approvals/approverResolver.js — REFACTORIZADO Fase 6.
-      //   DI-style ya recibía `db` por parámetro; wrapper global movido a
-      //   infrastructure/approverResolverGlobal.js.
-      // notifications/notificationService.js — REFACTORIZADO Fase 6.
-      //   prisma extraído a infrastructure/notificationModel.js.
-      "app/contexts/onboarding/application/onboardingImportService.js",
-      "app/contexts/organizations/application/organizationService.js",
-      // organizations/tenantApplicantUserGrants.js — REFACTORIZADO Fase 6.
-      // policies/employeeCategoryService.js — REFACTORIZADO Fase 6.
-      "app/contexts/policies/application/policyService.js",
-      // policies/policyAlertService.js — REFACTORIZADO Fase 6.
-      // policies/viaticasPolicyService.js — REFACTORIZADO Fase 6.
-      // policies/policyExceptionService.js — REFACTORIZADO Fase 6.
-      // receipts-cfdi/comprobantesService.js — REFACTORIZADO Fase 6.
-      // receipts-cfdi/receiptFileService.js — REFACTORIZADO Fase 6.
-      // refunds/reimbursementTimeService.js — REFACTORIZADO Fase 6.
-      // workflow/requestCommentService.js — REFACTORIZADO Fase 6.
-    ],
+    files: ["**/*.{js,ts,tsx}"],
+    ignores: ["packages/db/**", "packages/scheduler/**"],
     rules: {
       "no-restricted-imports": [
         "error",
@@ -139,19 +121,32 @@ export default [
             {
               name: "@prisma/client",
               message:
-                "Prisma solo debe importarse desde `app/contexts/<slice>/infrastructure/` o `app/platform/db/`. Usa los use-cases del slice para tocar datos.",
-            },
-            {
-              name: "~/platform/db/prisma.server",
-              message:
-                "El cliente Prisma solo se importa desde `infrastructure/` o desde otros archivos en `platform/db/`. Llama use-cases del slice.",
+                "Prisma solo se importa desde `packages/db/**`. Usa `@coco/db` o use-cases del slice.",
             },
           ],
-          patterns: [
+        },
+      ],
+    },
+  },
+
+  // ─── Routes/UI no pueden tocar @coco/db directamente ────────────────────
+  // apps/web/app/routes deben llamar use-cases del slice o servicios.
+  // apps/web/app/shared/ui no toca datos.
+  {
+    files: ["apps/web/app/routes/**/*.{js,ts,tsx}", "apps/web/app/shared/ui/**/*.{js,ts,tsx}"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
             {
-              group: ["**/platform/db/prisma.server*"],
+              name: "@coco/db",
               message:
-                "El cliente Prisma solo se importa desde `infrastructure/` o desde otros archivos en `platform/db/`.",
+                "Routes y shared/ui no consumen `@coco/db` directo. Llama un use-case del slice (`~/contexts/<slice>`).",
+            },
+            {
+              name: "@prisma/client",
+              message: "Prisma no se usa fuera de packages/db/**.",
             },
           ],
         },
@@ -160,19 +155,17 @@ export default [
   },
 
   // ─── Anti-fuga cross-slice por infrastructure ───────────────────────────
-  // Slices no pueden importar `~/contexts/<other>/infrastructure/...` —
-  // solo `~/contexts/<other>` (re-export en index.ts) o `~/contexts/<other>/application/...`.
   {
-    files: ["app/contexts/**/*.{js,ts,tsx}"],
+    files: ["apps/web/app/contexts/**/*.{js,ts,tsx}"],
     rules: {
       "no-restricted-imports": [
-        "warn",
+        "error",
         {
           patterns: [
             {
-              group: ["~/contexts/*/infrastructure/*", "../../*/infrastructure/*"],
+              group: ["~/contexts/*/infrastructure/*"],
               message:
-                "No importes infrastructure de otro slice directamente. Usa la API pública del slice (`~/contexts/<slice>`) o sus use-cases (`~/contexts/<slice>/application/`).",
+                "No importes infrastructure de otro slice directo. Usa `~/contexts/<slice>` o `~/contexts/<slice>/application/`.",
             },
           ],
         },
@@ -181,22 +174,16 @@ export default [
   },
 
   // ─── Routes no importan infrastructure directamente ─────────────────────
-  // Las routes deben llamar use-cases del slice, no repositorios crudos.
   {
-    files: ["app/routes/**/*.{js,ts,tsx}"],
+    files: ["apps/web/app/routes/**/*.{js,ts,tsx}"],
     rules: {
       "no-restricted-imports": [
-        "warn",
+        "error",
         {
           patterns: [
             {
-              group: ["~/contexts/*/infrastructure/*", "../../**/infrastructure/*"],
-              message:
-                "Las rutas deben llamar a `application/<useCase>` del slice, no a `infrastructure/`.",
-            },
-            {
-              group: ["@prisma/client"],
-              message: "Prisma no se usa desde rutas; expone la operación como use-case del slice.",
+              group: ["~/contexts/*/infrastructure/*"],
+              message: "Las rutas llaman use-cases (`application/`) del slice, no `infrastructure/`.",
             },
           ],
         },
@@ -206,16 +193,66 @@ export default [
 
   // ─── shared/ui no toca dominio ni platform ──────────────────────────────
   {
-    files: ["app/shared/ui/**/*.{js,ts,tsx}"],
+    files: ["apps/web/app/shared/ui/**/*.{js,ts,tsx}"],
     rules: {
       "no-restricted-imports": [
-        "warn",
+        "error",
         {
           patterns: [
             {
-              group: ["~/contexts/*", "../../**/contexts/*", "~/platform/*", "../../**/platform/*"],
+              group: ["~/contexts/*", "~/platform/*"],
               message:
-                "Componentes UI compartidos no deben depender de slices ni platform; reciben datos por props.",
+                "Shared UI no depende de slices ni platform; recibe datos por props. Para átomos puros usa `@coco/ui-kit`.",
+            },
+          ],
+        },
+      ],
+    },
+  },
+
+  // ─── No fetch interno a /api/* desde _app o shared/ui ────────────────────
+  // Toda data interna del web app pasa por loaders/actions de RR7.
+  {
+    files: ["apps/web/app/routes/_app/**/*.{js,ts,tsx}", "apps/web/app/shared/ui/**/*.{js,ts,tsx}"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              group: ["**/utils/apiClient*", "@utils/apiClient"],
+              message:
+                "Páginas internas y shared/ui no consumen el propio `/api/*`. Mueve el fetch al loader/action de la ruta.",
+            },
+          ],
+        },
+      ],
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector: "CallExpression[callee.name='fetch'][arguments.0.value=/^\\/api\\//]",
+          message: "No llames `/api/*` desde el cliente; usa loader/action de RR7.",
+        },
+      ],
+    },
+  },
+
+  // ─── packages/ui-kit no toca apps ni otros packages que no sean tipos ───
+  {
+    files: ["packages/ui-kit/**/*.{js,ts,tsx}"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              group: ["@coco/db", "@coco/contracts", "@coco/integrations", "@coco/scheduler"],
+              message:
+                "`@coco/ui-kit` solo depende de React + Tailwind. No conoce dominio, datos ni integraciones.",
+            },
+            {
+              group: ["**/apps/**"],
+              message: "`@coco/ui-kit` no importa código de `apps/*`. Es upstream.",
             },
           ],
         },
@@ -225,10 +262,16 @@ export default [
 
   // ─── Test files: más laxos ──────────────────────────────────────────────
   {
-    files: ["tests/**/*.{js,ts,tsx}", "**/*.test.{js,ts,tsx}", "**/*.spec.{js,ts,tsx}"],
+    files: [
+      "apps/web/tests/**/*.{js,ts,tsx}",
+      "**/*.test.{js,ts,tsx}",
+      "**/*.spec.{js,ts,tsx}",
+      "packages/**/test/**/*.{js,ts,tsx}",
+    ],
     rules: {
       "no-restricted-imports": "off",
       "no-console": "off",
+      "no-restricted-syntax": "off",
     },
   },
 ];

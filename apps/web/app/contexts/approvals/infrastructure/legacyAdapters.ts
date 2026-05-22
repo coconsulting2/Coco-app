@@ -1,0 +1,68 @@
+/**
+ * @module legacyAdapters (approvals slice)
+ * @description Adapters thin que envuelven servicios de OTROS slices aún
+ * en `.js` legacy. Cumplen los ports del slice approvals para mantener la
+ * arquitectura hexagonal de ESTE slice. Cuando los slices target sean
+ * convertidos a hexagonal proper, estos adapters se reemplazan importando
+ * directo del slice public API.
+ */
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore — legacy JS (workflow slice pending hexagonal refactor)
+import {
+  statusAfterN1Approval as legacyStatusAfterN1Approval,
+  statusAfterN2Approval as legacyStatusAfterN2Approval,
+} from "~/contexts/workflow/application/workflowRulesEngine.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore — legacy JS (policies slice pending)
+import * as legacyPolicyExceptionService from "~/contexts/policies/application/policyExceptionService.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore — legacy JS (accounts-payable slice pending)
+import legacyAnticipoPolizaLifecycleService from "~/contexts/accounts-payable/application/anticipoPolizaLifecycleService.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore — legacy JS (onboarding slice pending)
+import legacyEmployeeHierarchyService from "~/contexts/onboarding/application/employeeHierarchyService.js";
+
+import type { WorkflowRulesPort } from "~/contexts/approvals/domain/ports/WorkflowRulesPort.js";
+import type {
+  PolicyExceptionPort,
+  PolicyException,
+} from "~/contexts/approvals/domain/ports/PolicyExceptionPort.js";
+import type { AnticipoPolizaPort } from "~/contexts/approvals/domain/ports/AnticipoPolizaPort.js";
+import type { EmployeeHierarchyPort } from "~/contexts/approvals/domain/ports/EmployeeHierarchyPort.js";
+
+export class LegacyWorkflowRulesAdapter implements WorkflowRulesPort {
+  statusAfterN1Approval(levels: number[]): number {
+    return Number(legacyStatusAfterN1Approval(levels));
+  }
+  statusAfterN2Approval(): number {
+    return Number(legacyStatusAfterN2Approval());
+  }
+}
+
+export class LegacyPolicyExceptionAdapter implements PolicyExceptionPort {
+  async listPendingForRequest(requestId: number): Promise<PolicyException[]> {
+    const result = await legacyPolicyExceptionService.listPendingForRequest(requestId);
+    return (result ?? []) as PolicyException[];
+  }
+  async decideException(
+    exceptionId: number,
+    decision: "APPROVED" | "REJECTED",
+    userId: number,
+    note: string | null,
+  ): Promise<unknown> {
+    return legacyPolicyExceptionService.decideException(exceptionId, decision, userId, note);
+  }
+}
+
+export class LegacyAnticipoPolizaAdapter implements AnticipoPolizaPort {
+  async onTravelRequestFullyApproved(requestId: number): Promise<void> {
+    await legacyAnticipoPolizaLifecycleService.onTravelRequestFullyApproved(requestId);
+  }
+}
+
+export class LegacyEmployeeHierarchyAdapter implements EmployeeHierarchyPort {
+  async getApprovalChain(userId: number, depth: number): Promise<number[]> {
+    const chain = await legacyEmployeeHierarchyService.getApprovalChain(Number(userId), depth);
+    return (chain ?? []).map((x: number) => Number(x));
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "include": [
+    ".react-router/types/**/*",
+    "app/**/*",
+    "tests/**/*",
+    "cypress/**/*",
+    "*.ts",
+    "*.tsx"
+  ],
+  "compilerOptions": {
+    "types": ["@react-router/node", "vite/client"],
+    "rootDir": ".",
+    "baseUrl": ".",
+    "paths": {
+      "@coco/db": ["../../packages/db/src/index.ts"],
+      "@coco/db/*": ["../../packages/db/src/*"],
+      "@coco/contracts": ["../../packages/contracts/src/index.ts"],
+      "@coco/contracts/*": ["../../packages/contracts/src/*"],
+      "@coco/integrations": ["../../packages/integrations/src/index.ts"],
+      "@coco/integrations/*": ["../../packages/integrations/src/*"],
+      "@coco/ui-kit": ["../../packages/ui-kit/src/index.ts"],
+      "@coco/ui-kit/*": ["../../packages/ui-kit/src/*"],
+      "~/*": ["./app/*"],
+      "@components/*": ["./app/shared/ui/*"],
+      "@utils/*": ["./app/shared/utils/*"],
+      "@config/*": ["./app/shared/config/*"],
+      "@type/*": ["./app/shared/types/*"],
+      "@layouts/*": ["./app/shared/layouts/*"],
+      "@data/*": ["./app/shared/data/*"],
+      "@stores/*": ["./app/shared/stores/*"],
+      "@assets/*": ["./app/shared/assets/*"],
+      "@styles/*": ["./app/shared/styles/*"],
+      "@pages/*": ["./app/routes/*"]
+    }
+  },
+  "references": [
+    { "path": "../../packages/db" },
+    { "path": "../../packages/contracts" },
+    { "path": "../../packages/integrations" },
+    { "path": "../../packages/ui-kit" }
+  ]
+}

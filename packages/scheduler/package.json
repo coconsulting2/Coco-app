@@ -1,0 +1,32 @@
+{
+  "name": "@coco/scheduler",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "description": "Cron-driven background workers (SAT validation batch, accounting export, notifications flush, FX sync).",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "imports": {
+    "#/*": "./src/*"
+  },
+  "types": "./src/index.ts",
+  "scripts": {
+    "start": "bun run src/runner.ts",
+    "dev": "bun --watch run src/runner.ts",
+    "typecheck": "tsc -b",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@coco/db": "workspace:*",
+    "@coco/integrations": "workspace:*",
+    "dotenv": "^16.4.7",
+    "node-cron": "^4.2.1",
+    "pino": "^10.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.9.0",
+    "vitest": "^4.1.4"
+  }
+}

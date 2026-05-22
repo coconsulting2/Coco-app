@@ -4,7 +4,7 @@ Fusión de `TC3005B.501-Backend` (Express + Prisma + Postgres + MongoDB GridFS +
 
 ## Estado de la migración
 
-Migración por fases. El plan completo en `/Users/mvrer/.claude/plans/magical-exploring-russell.md`.
+Migración por fases. Ver `CLEANUP_PLAN.md` y `ARCHITECTURE.md` para el detalle.
 
 | Fase | Alcance | Estado |
 |---|---|---|

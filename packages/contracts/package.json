@@ -1,0 +1,26 @@
+{
+  "name": "@coco/contracts",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "description": "OpenAPI-generated TypeScript types for the public Swagger M1/M2 API contract.",
+  "exports": {
+    ".": "./src/index.ts",
+    "./m1": "./src/m1.ts",
+    "./m2": "./src/m2.ts"
+  },
+  "imports": {
+    "#/*": "./src/*"
+  },
+  "types": "./src/index.ts",
+  "scripts": {
+    "generate": "bun run scripts/generate.ts",
+    "typecheck": "tsc -b",
+    "build": "bun run scripts/generate.ts && tsc -b"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "openapi-typescript": "^7.4.4",
+    "typescript": "^5.9.0"
+  }
+}

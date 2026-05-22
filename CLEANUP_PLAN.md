@@ -1,309 +1,228 @@
-# CLEANUP_PLAN — deuda técnica explícita de la migración
+# CLEANUP_PLAN — handoff de sesión 2026-05-22 → siguientes
 
-> **Estado actual (post-Fase 6 completa):**
-> - 16/16 slices con `domain/` + `index.ts`
-> - 60 rutas registradas (41 pages + 17 resource routes + index + 404 + login)
-> - 0 violaciones estructurales en routes/shared
-> - **0 services en `application/` con prisma directo** ✅ (era 16 al inicio)
->
-> **Fase 6 — Hardening COMPLETO:** los 16 services legacy fueron refactorizados.
-> Sus queries Prisma viven ahora en `infrastructure/<x>Queries.js` o
-> `infrastructure/<x>Model.js`. La regla "solo infrastructure toca Prisma"
-> es ahora una regla **dura**: el grandfather de ESLint quedó vacío.
+## Estado al cierre
 
-Este documento lista todo lo que NO está limpio en `coco-app/` y debe quedar
-resuelto antes de eliminar el backend legacy (`:3000`) y los repos
-`TC3005B.501-Backend/` + `TC3005B.501-Frontend/`.
+✅ **M1-M6 completos:** monorepo bun workspaces wireado.
 
-Sirve como matriz de "qué pasa entre la migración funcional y la migración
-arquitectónicamente impecable". Cero ocultamiento.
-
----
-
-## 1. Application services con Prisma inline — ✅ RESUELTO
-
-**Antes:** 16 services legacy con prisma inline en `application/`.
-**Después:** 0. La regla "solo infrastructure toca Prisma" se aplica sin excepciones.
-
-Cada service movió sus queries a:
-- `infrastructure/<slice>Queries.js` — funciones puras de query/comando.
-- `infrastructure/<slice>Model.js` — repositorio (estilo objeto con métodos).
-
-El service en `application/` ahora orquesta use-cases llamando a esos wrappers
-y NO importa `@prisma/client` ni `~/platform/db/prisma.server`.
-
-**Patrón replicable** (ver `app/contexts/notifications/`):
-1. Crear `infrastructure/<slice>Model.js` o `<slice>Queries.js` con prisma.
-2. Reescribir el service para importar wrappers en lugar de prisma.
-3. Confirmar `bun run lint` pasa sin grandfather.
-
-### Histórico de refactor (Fase 6 completa)
-
-| Slice | Service | Infra creada | Estado |
-|---|---|---|---|
-| accounts-payable | `accountingExportService.js` | `accountingExportQueries.js` | ✅ |
-| accounts-payable | `anticipoPolizaLifecycleService.js` | `anticipoPolizaQueries.js` | ✅ |
-| approvals | `approverResolver.js` (DI-style ya limpio) | `approverResolverGlobal.js` (wrapper) | ✅ |
-| notifications | `notificationService.js` | `notificationModel.js` | ✅ |
-| onboarding | `onboardingImportService.js` | `onboardingImportQueries.js` | ✅ |
-| organizations | `organizationService.js` | `organizationQueries.js` | ✅ |
-| organizations | `tenantApplicantUserGrants.js` | `tenantApplicantGrantQueries.js` | ✅ |
-| policies | `employeeCategoryService.js` | `employeeCategoryQueries.js` | ✅ |
-| policies | `policyService.js` | `policyQueries.js` | ✅ |
-| policies | `policyAlertService.js` | `policyAlertQueries.js` | ✅ |
-| policies | `viaticasPolicyService.js` | `viaticasPolicyQueries.js` | ✅ |
-| policies | `policyExceptionService.js` | `policyExceptionQueries.js` | ✅ |
-| receipts-cfdi | `comprobantesService.js` | `comprobantesQueries.js` | ✅ |
-| receipts-cfdi | `receiptFileService.js` | `receiptFileQueries.js` | ✅ |
-| refunds | `reimbursementTimeService.js` | `reimbursementTimeQueries.js` | ✅ |
-| workflow | `requestCommentService.js` | `requestCommentQueries.js` | ✅ |
-
-**Patrón de refactor** (igual al que aplicamos a `applicantService.findReceiptByCfdiUuid`):
-
-1. Mover cada `await prisma.X.query(...)` a un método nuevo en el modelo correspondiente.
-2. En el service, importar el modelo y llamar `Model.method(args)`.
-3. Quitar el archivo del `ignores` de ESLint.
-4. `bun run lint` debe pasar sin necesidad del grandfather.
-
-**Plazo recomendado:** Fase 6 (hardening). Bloqueante para producción.
-
----
-
-## 2. Slices sin `domain/` ni `index.ts` público
-
-**Solo `identity/` tiene domain/ y index.ts poblados** (referencia completa).
-Los otros 15 slices tienen las carpetas `domain/entities/`, `domain/ports/`
-**vacías** (creadas con mkdir, sin archivos dentro) y **no tienen** `index.ts`.
-
-Falta para cada slice restante (15):
-
-- `domain/entities/<Entidad>.ts` con tipos del dominio (camelCase, sin Prisma).
-- `domain/ports/<Repo>.ts` con interfaces.
-- `domain/errors.ts` con errores tipados.
-- `index.ts` re-exportando la API pública del slice.
-
-**Beneficio del refactor:** las routes y otros slices importan solo desde
-`~/contexts/<slice>` (no profundizan), permitiendo cambios internos del slice
-sin romper consumidores.
-
-**Plazo recomendado:** incremental. Cuando se migre una page que necesita un
-slice, primero se le añade `domain/` + `index.ts` al slice destino.
-
-**Molde disponible:** `templates/slice-template/`. Comando para inicializar
-un slice nuevo está en `templates/slice-template/README.md`.
-
----
-
-## 3. Routes pendientes
-
-Solo 13 rutas migradas de las ~44 del frontend legacy. **Cada ruta requiere
-migrar el `.astro` original a `.tsx` con loader/action por DI.**
-
-Roadmap por fase:
-
-### Fase 2 — Read-only (8 rutas pendientes)
-- Hotels lookup endpoints
-- Flights lookup endpoints
-- Organizations admin (read)
-- Notifications inbox
-- Policies read
-- Refunds rules read
-
-### Fase 3 — travel-requests + approvals + workflow
-- `/crear-solicitud`, `/editar-solicitud/:id`, `/detalles-solicitud/:id`
-- `/completar-draft/:id`
-- `/autorizaciones`, `/aprobaciones`, `/autorizar-solicitud/:id`
-- `/solicitudes-autorizador`
-- `/reembolso`
-
-### Fase 4 — receipts + agency + payable
-- `/subir-comprobante/:id`, `/resubir-comprobante/:id`
-- `/comprobar-gastos`, `/comprobar-gastos/:id`
-- `/comprobar-solicitud/:id`
-- `/atenciones`, `/atender-solicitud/:id`
-- `/todas-las-solicitudes`, `/cotizaciones`, `/cotizar-solicitud/:id`
-- `/comprobaciones`, `/exportar-contable`
-
-### Fase 5 — admin
-- `/admin/expense-policies`, `/admin/employee-categories`, `/admin/refund-time-limits`
-- `/admin/organizations`, `/admin/onboarding-import`
-- `/admin/catalogo-contable`, `/admin/indicadores-impuesto`, `/admin/mapeo-gastos`
-- `/admin/cost-centers`, `/admin/workflow-rules`, `/admin/workflow-simulator`
-- `/admin/roles`
-- `/reportes/gastos-por-centro`
-
----
-
-## 4. Resource routes `/api/*` pendientes
-
-Solo conservar cuando hay razón externa (legacy LoginForm, terceros, OpenAPI,
-multipart). Inventario por slice:
-
-| Endpoint legacy | Razón para preservar | Estado |
+| Package | Status | Typecheck |
 |---|---|---|
-| `/api/user/*` | LoginForm legacy | ✓ Migrado |
-| `/api/exchange-rate/*`, `/api/fx/*` | OpenAPI + ExchangeRateDisplay | ✓ Migrado |
-| `/api/files/*` | Upload multipart estable, contrato OpenAPI | ⏳ Fase 4 |
-| `/api/comprobantes/*` | CFDI integration documentada | ⏳ Fase 4 |
-| `/api/external/*` | API keys de terceros | ⏳ Fase 2/5 |
-| `/api/keys/*` | Admin panel API keys | ⏳ Fase 5 |
-| `/api/admin/*`, `/api/applicant/*`, `/api/authorizer/*`, `/api/accounts-payable/*`, `/api/notifications/*`, `/api/policies/*`, `/api/solicitudes/*`, etc. | **Solo flujos in-app** → migrar a actions/loaders sin endpoint HTTP | ⏳ Fases 3-5 |
+| `@coco/db` | ✅ Prisma + RLS + tenant primitives | verde |
+| `@coco/contracts` | ✅ tipos OpenAPI M1+M2 generados | verde |
+| `@coco/integrations` | ✅ Duffel flights+stays + SAT SOAP, tipado | verde |
+| `@coco/scheduler` | ✅ runner + 4 jobs (sat-validate, notification-flush, accounting-export, fx-sync) | verde |
+| `@coco/ui-kit` | ✅ 11 átomos + 4 support files (internals) | verde |
+| `@coco/web` | ⚠️ stack instalado + boundary shims, MIGRACIÓN PENDIENTE | pendiente |
 
----
+✅ **M8 — identity + approvals (core) hexagonal proper:** 48 carpetas
+vacías borradas.
 
-## 5. Componentes UI legacy que usan `apiClient`
+**approvals slice (M8 cont.):** flujo N1/N2 completo hexagonal proper:
+- Ports: `AuthorizerRepository` (queries + transición atómica), `WorkflowRulesPort`,
+  `PolicyExceptionPort`, `AnticipoPolizaPort`, `EmployeeHierarchyPort`,
+  `ApprovalInboxQueries`
+- Adapters: `PrismaAuthorizerRepository`, `PrismaApprovalInboxQueries`,
+  `legacyAdapters.ts` (wrappers tipados sobre servicios `.js` cross-slice
+  legacy, conformes a los ports — se reemplazan cuando esos slices se
+  refactoricen)
+- Use-cases: `authorizeTravelRequest`, `rejectTravelRequest`, `reassignApproval`,
+  `getApprovalInbox` — todos con DI por parámetro
+- `index.ts` composition root + adapters/usecases namespaces para tests
+- Dispatchers actualizados: `authorizerApi`, `inboxApi`, `solicitud-workflowApi`
+- `.js` eliminados de approvals core: `authorizerService.js`, `authorizerModel.js`
+- Sigue en `.js` (sub-features pendientes): `approverResolver.js`,
+  `approverResolverGlobal.js`, `approvalSubstituteService.js`,
+  `approvalSubstituteModel.js`, `alertMessageResolver.js`, `createRequestInsertAlert.js`
 
-Componentes copiados verbatim de `Frontend/src/components/` que hacen fetch a
-`/api/*` via `apiClient.ts`. Funcionan tal cual porque conservamos `/api/user/*`
-y `/api/exchange-rate/*`. Para los demás slices, hay dos opciones:
+**identity slice (M8 inicial):** Identity refactorizado a hexagonal **proper**
+(ports + adapters DI + use-cases con deps por parámetro + composition root en `index.ts`):
+- Ports: `UserRepository`, `LookupsRepository`, `PasswordHasher`,
+  `SessionTokenSigner`, `PiiCipher` (en `domain/ports/`)
+- Adapters: `PrismaUserRepository`, `PrismaLookupsRepository`,
+  `BcryptPasswordHasher`, `JwtSessionTokenSigner`, `PlatformPiiCipher`
+- Use-cases: `authenticateUser`, `getUserProfile`, `listAvailableRoles`,
+  `listAvailableDepartments`, `createUser`, `updateUserData`, `deactivateUser`,
+  `listUsers`, `listUsersForAdmin`, `findUserInOrg`
+- `index.ts` expone funciones pre-wired (composition root) + `usecases`/`adapters`
+  namespaces para tests con stubs
 
-**A) Mantenerlos como están**, levantando el endpoint `/api/*` correspondiente.
-  Pro: cero cambios al componente. Contra: doble-hop HTTP (un fetch innecesario).
+Use-cases hexagonal añadidos a otros slices para queries que identity
+absorbió legacy:
+- `approvals/`: `ApprovalInboxQueries` port + adapter + `getApprovalInbox` use-case
+- `travel-requests/`: `TravelRequestAdminQueries` port + adapter +
+  `getTravelRequestDetail` + `listTravelRequestsByDeptStatus` use-cases
 
-**B) Migrar el componente a `useFetcher()` / `useSubmit()` de RR v7.**
-  Pro: elimina el doble-hop. Contra: cambio mecánico en cada componente.
+Routes/dispatchers consumidores migrados a la nueva API:
+- `dashboard.tsx`, `crear-usuario.tsx`, `editar-usuario.$id.tsx`,
+  `perfil-usuario.tsx`, `userApi.server.ts`, `adminApi.server.ts`
 
-**Recomendación:** A durante Fases 2-5 (no romper componentes); B en Fase 6.
+`.js` legacy eliminados de identity: `userService.js`, `userModel.js`,
+`adminService.js`, `adminModel.js`, `adminAccountsService.js`, `lookupsService.js`,
+`lookupsModel.js`. También `platform/crypto/pii.server.js` → `.ts`.
 
-Lista de componentes que usan apiClient (output de `grep -l "apiRequest" app/shared/ui`):
-- `AdminUserForm.tsx`, `TravelRequestForm.tsx`, `AttendRequest.tsx`,
-  `CxpQuoteRequest.tsx`, `ExpensesForm.tsx`, `UploadReceiptFiles.tsx`,
-  `AproveRequestModal.tsx`, `AproveReceiptModal.tsx`, `RejectReceiptsModal.tsx`,
-  `CancelRequestModal.tsx`, `PolicyExceptionModal.tsx`, `AccountingExportPanel.tsx`,
-  `AccountingAccountAdmin.tsx`, etc.
+Quedan en identity: `permissionModel.js` (es concern de `platform/permissions`,
+no del slice identity — pendiente refactor separado).
 
----
+✅ **M9 parcial:** ESLint config reescrito con boundary rules a `error`:
+- Absolute imports puros en apps/web/app y packages/*/src
+- Prisma confinado a `packages/db/` y `packages/scheduler/`
+- Routes y shared/ui no tocan `@coco/db` ni `apiClient`
+- Slices no se cruzan por infrastructure
+- shared/ui no toca slices/platform
+- ui-kit upstream (no importa apps/* ni otros packages)
 
-## 6. Cookies legacy escritas por LoginForm
+✅ **Docs actualizados:** `ARCHITECTURE.md`, `apps/web/app/routes/api/README.md`.
 
-`LoginForm.tsx` (verbatim del frontend) escribe `document.cookie` con `token`,
-`role`, `username`, `user_id`, `department_id` para que el middleware Astro
-las leyera. En `coco-app/`:
+## Lo que falta — siguiente sesión(es)
 
-- `token` httpOnly se setea por el resource route `/api/user/login` (Set-Cookie).
-- `role`, `username`, etc. NO necesitan vivir en cookies cliente — el `_app/_layout`
-  loader las expone vía `useRouteLoaderData`.
+### M8 restante (`.js` → `.ts` con HEXAGONAL PROPER)
 
-**Plazo:** Fase 6. Al rewrite de `LoginForm` con `<Form method="post">`, las
-cookies legacy del cliente desaparecen. Componentes que aún leen
-`document.cookie` (vía `getSession`) se migran al hook del layout loader.
+**~115 archivos `.js` legacy en `apps/web/app/`** (15 slices, restantes) deben
+convertirse SIGUIENDO el patrón validado en identity:
 
----
+1. **Domain ports** (interfaces) en `domain/ports/X.ts` — sin imports de infra
+2. **Infrastructure adapters** (clases que implementan los ports) en
+   `infrastructure/PrismaX.ts` — único sitio acoplado a Prisma vía `~/platform/db/prisma.server`
+3. **Application use-cases** en `application/X.ts` — reciben deps por parámetro;
+   NO `import model from "infrastructure/..."`
+4. **Slice `index.ts`** — composition root: pre-wired functions + raw
+   `usecases`/`adapters` namespaces para tests
+5. **Routes / api dispatchers** importan SOLO la API pública del slice
 
-## 7. Carpetas a borrar al cierre
+**Patrón de referencia (estudiar primero):** `apps/web/app/contexts/identity/`.
 
-| Carpeta / archivo | Borrar cuando | Razón |
+**Anti-pattern a evitar:** convertir `.js` → `.ts` preservando "service llama
+model singleton". Eso es arquitectura "en capas", NO hexagonal. Si encuentras
+ese patrón en el legacy, refactorea a DI.
+
+**Tracking del legacy restante:** `apps/web/app/types/legacy-js.d.ts` declara
+los `.js` aún no convertidos como `declare module "..."` (ambient `any`).
+Cada conversión a hexagonal proper elimina su entry. Drain to zero es el goal.
+
+**`@ts-ignore` restantes:** `grep -rln '@ts-ignore' apps/web/app | wc -l`.
+Quedan unos en `entry.server.tsx` (legacy JS bootstrap) y dispatchers de
+slices aún no refactorizados. Drain to zero conforme cada slice se refactoree.
+
+**Slices ordenados por costo aproximado** (ascendente):
+
+| Slice | .js restantes | Estimado |
 |---|---|---|
-| `coco-app/database/` | Tras validar `bun run dummy_db` apunte solo a `prisma/` | Los SQL de `Schema/` son referencia legacy; prisma migra el schema. |
-| `TC3005B.501-Backend/` | Cypress 15/15 verde + diff-api 0 divergencias | Source de la migración; preservar mientras `:3000` corra como red de seguridad. |
-| `TC3005B.501-Frontend/` | Idem | Idem. |
-| `coco-app/_legacy-*` | Ya borrados ✓ | Staging temporal de la migración. |
+| `identity` | 5 (userService, adminService, userModel, adminModel, permissionModel) | ~2h |
+| `fx` | ~3 | ~30min |
+| `api-keys` | ~3 | ~30min |
+| `notifications` | ~4 | ~45min |
+| `onboarding` | ~3 | ~45min |
+| `policies` | ~10 | ~2h |
+| `workflow` | ~4 | ~1h |
+| `approvals` | ~7 | ~1.5h |
+| `refunds` | ~3 | ~45min |
+| `organizations` | ~4 | ~1h |
+| `travel-requests` | ~5 | ~1.5h |
+| `travel-agency` | ~6 | ~1h (Duffel ya en @coco/integrations) |
+| `accounts-payable` | ~8 | ~2h |
+| `receipts-cfdi` | ~8 | ~2h (SAT ya en @coco/integrations) |
+| `hotels` | ~6 | ~1h (Duffel ya en @coco/integrations) |
+| `flights` | ~5 | ~1h (Duffel ya en @coco/integrations) |
 
----
+**Refactor adicional:** las funciones de Duffel y SAT que existen en
+`apps/web/app/contexts/{flights,hotels,travel-agency,receipts-cfdi}/infrastructure/`
+deben **eliminarse** y los callers deben importar de `@coco/integrations`
+(ya tipado y tested).
 
-## 8. ESLint hardening adicional
+### M7 — Fix bug Solicitante "Requieren tu atención"
 
-Reglas que el `eslint.config.js` actual marca como `"warn"` y deberían pasar a
-`"error"` en Fase 6:
+Pendiente reproducir. El tab "Requieren tu atención" del rol Solicitante sale
+vacío aunque la DB tenga requests no-borrador. Probable causa: el query
+`Applicant.getApplicantRequests` bajo RLS — verificar que `runInTenant(session, ...)`
+setea `app.current_organization_id` correctamente y que `ApplicantView`
+consume el shape esperado.
 
-- `no-restricted-imports` cross-slice por `infrastructure/` (actualmente warn).
-- `no-restricted-imports` desde routes a `infrastructure/` (actualmente warn).
-- `quotes`, `eqeqeq`, `no-console` → uniformizar.
+### M10 — Matar `/api/*` internos (loader migration)
 
----
+Ver `apps/web/app/routes/api/README.md` para la lista de los 18 endpoints
+internos a retirar.
 
-## Checklist final (Fase 6 — pre-prod)
+**~46 archivos** en `apps/web/app/{routes/_app,shared/ui}/` con
+`apiRequest`/`fetch('/api/...')`. Lista actual:
 
-- [ ] Cero archivos en `ignores` de ESLint para anti-fuga de Prisma.
-- [ ] Los 16 slices con `domain/` + `index.ts`.
-- [ ] Las 44 rutas legacy migradas a `.tsx`.
-- [ ] Diff de endpoints `:3000` vs `:5173` → 0 divergencias.
-- [ ] Cypress 15/15 verdes.
-- [ ] `coco-app/database/` borrado.
-- [ ] Cookies legacy del cliente eliminadas (solo httpOnly session).
-- [ ] `_legacy-*` borrados (ya hecho ✓).
-- [ ] Repos `TC3005B.501-Backend/` y `TC3005B.501-Frontend/` archivados a branch `legacy/pre-coco-app`.
+```bash
+grep -rln 'apiRequest\|fetch(.*\/api\/' apps/web/app/routes/_app apps/web/app/shared/ui
+```
 
----
+ESLint ya bloquea código nuevo. Los existentes están grandfathered hasta migración.
 
-## 9. Endpoint deprecation map (Phase 7 candidate)
+**Waves:**
 
-Análisis automatizado (grep de `apiRequest(` y `fetch(` en `app/shared/ui/**`)
-identifica **12 resource routes `/api/*` que NO son consumidas por ningún
-componente legacy** y por lo tanto pueden migrarse a DI puro en las routes
-correspondientes — eliminando el doble-hop HTTP.
+1. Applicant flow (TravelRequestForm + 3 routes)
+2. Approver N1/N2 (4 routes)
+3. Travel Agent / Duffel (4 routes — ahora usa `@coco/integrations`)
+4. CxP receipts + accounting export
+5. Refunds + policy exceptions
+6. Admin (12 routes en `/admin/*`)
+7. Mop-up: reportes, notification bell, etc.
 
-**Cada uno tiene una página `routes/_app/...tsx` que YA usa DI** (loader llama
-use-case directo). El endpoint resource solo existiría para integraciones
-externas hipotéticas. Si no hay tercero documentado en OpenAPI ni componente
-legacy que los use, son removibles.
+### M11 — Features faltantes 1:1 con legacy
 
-### Endpoints redundantes (12)
+HIGH:
+- N1/N2 decide buttons (route + action)
+- Duffel quoting flow (usa `@coco/integrations.duffel`)
+- CxP batch approve/reject
+- Accounting export CFDI/SAT XML (download action)
+- SAT validation wiring (`@coco/integrations.sat.consultarCfdiWithRetries`)
+- Refund payout actions
 
-| Endpoint | Cómo se usa hoy | Acción Phase 7 |
-|---|---|---|
-| `/api/admin/*` | Routes admin con DI (crear-usuario, editar-usuario.$id) | Eliminar (DI cubre) |
-| `/api/approval-substitutes/*` | Admin substitutos (a migrar) | Eliminar tras migrar UI |
-| `/api/authorizer/*` | Cubierto por /api/solicitudes/{:id}/{aprobar,rechazar} | Eliminar (alias redundante) |
-| `/api/export/*` | Reemplazado por route /exportar-contable + DI | Eliminar |
-| `/api/flights/*` | Solo usado vía /api/travel-agent/* | Eliminar |
-| `/api/hotels/*` | Solo usado vía /api/travel-agent/* | Eliminar |
-| `/api/keys/*` | Admin API keys (panel a migrar) | Conservar si hay panel pendiente; sino DI |
-| `/api/notifications/*` | NotificationBell (verificar consumo) | Conservar si consumido; sino DI |
-| `/api/onboarding-import/*` | OnboardingImportAdmin usa apiRequest interno | Conservar si OpenAPI; sino DI |
-| `/api/report/*` | /reportes/gastos-por-centro usa DI | Eliminar |
-| `/api/viajes/*` | RouteInputGroup / gastoTramo (verificar) | Conservar si consumido |
-| `/api/viaticos-policy/*` | Admin viáticos (panel a migrar) | Conservar o DI |
+**MEDIUM:**
+- Admin CRUD wiring (12 routes en `_app/admin/*`)
+- Workflow rule simulator
+- Onboarding CSV bulk import con feedback de progreso
+- Notification triggers en lifecycle events
+- FX/exchange rate display
 
-### Endpoints NECESARIOS (no remover)
+**LOW:**
+- Sort/pagination via URL search params en listas
+- `refund-time-limits.tsx` UI completa
+- Org suspend/activate UI
+- `reportes/gastos-por-centro.tsx`
 
-Consumidos directamente por componentes legacy en `shared/ui/` via `apiClient.ts`:
+### M12 — Tests
 
-| Endpoint | Componentes consumidores |
-|---|---|
-| `/api/user/*` | LoginForm, Logout |
-| `/api/applicant/*` | TravelRequestForm, CancelRequestModal, ExpensesForm, SubmitTravelWarper |
-| `/api/accounts-payable/*` | CxpQuoteRequest, SubmitTravelWarper, RejectReceiptsModal, FinisCheck |
-| `/api/comprobantes/*` | ExpensesForm, XmlExpenseForm |
-| `/api/employee-categories/*` | EmployeeCategoriesAdmin |
-| `/api/organizations/*` | OrganizationsAdmin |
-| `/api/policies/*` | ExpensePoliciesAdmin |
-| `/api/refunds/*` | PolicyExceptionsInbox, RefundTimeLimitConfig |
-| `/api/solicitudes/*` | CommentsThread, TravelRequestAuthorizeActions |
-| `/api/travel-agent/*` | AttendRequest |
-| `/api/workflow-rules/*` | WorkflowRulesAdmin |
+- Unitarios Vitest sobre use-cases nuevos
+- Cypress E2E por rol (applicant, approver, agency, cxp, admin, refund)
 
-### Endpoints para integraciones externas (conservar siempre)
+### M13 — Verificación final
 
-| Endpoint | Razón |
-|---|---|
-| `/api/fx/*` | OpenAPI utility |
-| `/api/exchange-rate/*` | OpenAPI documented contract |
-| `/api/files/*` | Multipart upload contract estable |
-| `/api/external/*` | API keys de terceros (autenticación distinta) |
+Métricas a 0 al cierre:
 
-### Plan de migración Phase 7
+```bash
+grep -rln 'apiRequest\|fetch(.*\/api\/' apps/web/app/routes/_app apps/web/app/shared/ui | wc -l  # → 0
+grep -rln '@ts-ignore' apps/web/app | wc -l                                                     # → 0
+find apps/web/app/contexts -type d -empty | wc -l                                               # → 0
+find apps/web/app/contexts -name '*.js' | wc -l                                                 # → 0
+bun --filter '*' typecheck                                                                       # 0 errores
+bun run lint                                                                                     # 0 errores
+```
 
-1. **Cada componente legacy** con `apiRequest("/X")` se migra a `useFetcher()` apuntando a la action de su page route.
-2. La action de la page llama al use-case por DI.
-3. El endpoint `/api/X/*` se elimina del `routes.ts` y se borra el dispatcher.
-4. ESLint sigue verde porque eliminamos código, no agregamos violaciones.
+## Archivos críticos referenciados
 
-Esto **NO es bloqueante para producción** — el doble-hop HTTP funciona correctamente, solo es overhead optimizable.
+- `ARCHITECTURE.md` — referencia de layout + reglas + comandos.
+- `eslint.config.js` — reglas estructurales (a `error`).
+- `apps/web/app/routes/api/README.md` — contrato `/api/*` kept vs retire.
+- `apps/web/app/contexts/identity/{domain/ports,application,infrastructure}/*.ts`
+  — patrón de referencia de conversión `.js`→`.ts` hexagonal proper.
+- `apps/web/app/contexts/approvals/{domain/ports,application,infrastructure}/*.ts`
+  — segundo ejemplo, con cross-slice deps vía adapters.
 
----
+## Riesgos a vigilar
 
-## 10. Estado FINAL Phases 0-6
-
-| Item | Estado |
-|---|---|
-| Slices con domain/+index.ts | 16 / 16 ✅ |
-| Application services sin Prisma directo | 16 / 16 ✅ |
-| Routes (in-app pages) | 41 ✅ (0 placeholders sin componente legítimo) |
-| Resource routes /api/* | 25 ✅ (1:1 con backend legacy + 12 candidatos a DI) |
-| Tests copiados | 108 ✅ (83 backend + 25 frontend) |
-| Cypress specs | 16 ✅ (baseUrl ajustado a :5173) |
-| ESLint estructural | 0 violaciones |
-| Imports absolutos `~/*` | 100% en código nuevo |
-| Doc style alineado | `@module` + `@description` (estilo legacy) |
-
+- **Tailwind v4 content paths**: `@tailwindcss/vite` debería auto-detectar
+  imports a `@coco/ui-kit`, pero si las classes de los átomos no se generan
+  en build, agregar explícitamente `../../packages/ui-kit/src/**/*.{ts,tsx}`
+  al config Tailwind (no había `tailwind.config` explícito al cierre — se
+  usaba el default v4).
+- **TS project references**: si `tsc -b` desde root falla por dependencias
+  no construidas, hay que correr `bun --filter @coco/db generate && bun --filter '*' typecheck`
+  para ordenar el build.
+- **Imports `.js` en `.ts`**: con `moduleResolution: Bundler` esto resuelve.
+  Si en algún punto se cambia a `NodeNext`, hay que revisar todos los
+  `.server.js` imports en `.ts` files.
+- **Prisma client genera en `node_modules/.bun/...`**: si el path cambia,
+  re-correr `bun --filter @coco/db generate`.

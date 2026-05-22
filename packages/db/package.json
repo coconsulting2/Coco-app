@@ -1,0 +1,35 @@
+{
+  "name": "@coco/db",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "description": "Prisma client, RLS, tenant context for CocoConsulting.",
+  "exports": {
+    ".": "./src/index.ts",
+    "./tenant": "./src/tenant.ts",
+    "./prisma": "./src/client.ts"
+  },
+  "imports": {
+    "#/*": "./src/*"
+  },
+  "types": "./src/index.ts",
+  "scripts": {
+    "generate": "prisma generate --schema=./prisma/schema.prisma",
+    "migrate": "prisma migrate dev --schema=./prisma/schema.prisma",
+    "studio": "prisma studio --schema=./prisma/schema.prisma",
+    "seed": "bun run prisma/seed.js",
+    "seed:dummy": "bun run prisma/seed.js dev",
+    "seed:usability": "bun run prisma/seed-usability.js",
+    "seed:orgs": "bun run prisma/seed-orgs.js",
+    "reset": "prisma db push --force-reset --schema=./prisma/schema.prisma && bun run prisma/seed.js dev",
+    "typecheck": "tsc -b"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.16.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "prisma": "^6.16.0",
+    "typescript": "^5.9.0"
+  }
+}

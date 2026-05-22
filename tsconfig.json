@@ -1,45 +1,11 @@
 {
-  "include": [
-    ".react-router/types/**/*",
-    "app/**/*",
-    "tests/**/*",
-    "cypress/**/*",
-    "*.ts",
-    "*.tsx"
-  ],
-  "compilerOptions": {
-    "lib": ["DOM", "DOM.Iterable", "ES2022"],
-    "types": ["@react-router/node", "vite/client"],
-    "target": "ES2022",
-    "module": "ESNext",
-    "moduleResolution": "Bundler",
-    "jsx": "react-jsx",
-    "jsxImportSource": "react",
-    "resolveJsonModule": true,
-    "allowImportingTsExtensions": true,
-    "noEmit": true,
-    "isolatedModules": true,
-    "esModuleInterop": true,
-    "allowSyntheticDefaultImports": true,
-    "skipLibCheck": true,
-    "strict": true,
-    "noUncheckedIndexedAccess": false,
-    "forceConsistentCasingInFileNames": true,
-    "baseUrl": ".",
-    "paths": {
-      "~/prisma/*": ["./prisma/*"],
-      "~/*": ["./app/*"],
-      "@components/*": ["./app/shared/ui/*"],
-      "@utils/*": ["./app/shared/utils/*"],
-      "@config/*": ["./app/shared/config/*"],
-      "@type/*": ["./app/shared/types/*"],
-      "@views/*": ["./app/_legacy-views/*"],
-      "@layouts/*": ["./app/shared/layouts/*"],
-      "@data/*": ["./app/shared/data/*"],
-      "@stores/*": ["./app/shared/stores/*"],
-      "@assets/*": ["./app/shared/assets/*"],
-      "@styles/*": ["./app/shared/styles/*"],
-      "@pages/*": ["./app/routes/*"]
-    }
-  }
+  "files": [],
+  "references": [
+    { "path": "./packages/db" },
+    { "path": "./packages/contracts" },
+    { "path": "./packages/integrations" },
+    { "path": "./packages/scheduler" },
+    { "path": "./packages/ui-kit" },
+    { "path": "./apps/web" }
+  ]
 }
