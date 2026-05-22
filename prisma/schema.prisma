@@ -1,0 +1,1022 @@
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "windows", "debian-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// =====================================================================
+// MULTI-TENANT BASELINE — Ditta como organización ROOT + N orgs CLIENT.
+// Decisiones documentadas en el plan formal aprobado (refactored-hugging-flask.md).
+// =====================================================================
+
+enum OrganizationKind {
+  ROOT
+  CLIENT
+
+  @@map("organization_kind")
+}
+
+enum OrganizationStatus {
+  CONFIGURING
+  ACTIVE
+  SUSPENDED
+
+  @@map("organization_status")
+}
+
+/// Organización (tenant). Ditta es la única con kind=ROOT.
+/// La tabla "organizaciones" preexistía en raw SQL — este modelo la adopta.
+model Organization {
+  id           BigInt             @id @default(autoincrement())
+  nombre       String             @db.VarChar(100)
+  razonSocial  String?            @map("razon_social") @db.VarChar(200)
+  rfc          String?            @db.VarChar(13)
+  logoUrl      String?            @map("logo_url") @db.Text
+  timezone     String             @default("America/Mexico_City") @db.VarChar(60)
+  baseCurrency String             @default("MXN") @map("base_currency") @db.VarChar(3)
+  kind         OrganizationKind   @default(CLIENT)
+  status       OrganizationStatus @default(CONFIGURING)
+  createdAt    DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime           @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  users                   User[]
+  roles                   Role[]
+  departments             Department[]
+  requests                Request[]
+  receipts                Receipt[]
+  routes                  Route[]
+  routeRequests           RouteRequest[]
+  gastoTramos             GastoTramo[]
+  cfdiComprobantes        CfdiComprobante[]
+  alerts                  Alert[]
+  solicitudHistorial      SolicitudHistorial[]
+  notifications           Notification[]
+  userPreferences         UserPreference[]
+  pushSubscriptions       PushSubscription[]
+  alertMessages           AlertMessage[]
+  receiptTypes            ReceiptType[]
+  permissionGroups        PermissionGroup[]
+  userPermissions         UserPermission[]
+  userPermissionGroups    UserPermissionGroup[]
+  employeeCategories      EmployeeCategory[]
+  travelPolicies          TravelPolicy[]
+  policyExceptions        PolicyException[]
+  reimbursementTimeLimits ReimbursementTimeLimit[]
+  workflowRules           WorkflowRule[]
+  proveedores             Proveedor[]
+  empleados               Empleado[]
+  approvalSubstitutes     ApprovalSubstitute[]
+  chartOfAccounts         ChartOfAccount[]
+  accountingDocTypes      AccountingDocType[]
+  accountingSocieties     AccountingSociety[]
+  integrations            OrganizationIntegration[]
+  notificationTemplates   NotificationTemplate[]
+  apiKeys                 ApiKey[]
+  anticipoPolizaSnapshots AnticipoPolizaSnapshot[]
+  accountingPolizas       AccountingPoliza[]
+  viaticosPolicy          ViaticosPolicy?
+
+  @@map("organizaciones")
+}
+
+// =====================================================================
+// RBAC — Role per-org + catálogo de Permission GLOBAL.
+// =====================================================================
+
+model Role {
+  roleId               Int                   @id @default(autoincrement()) @map("role_id")
+  organizationId       BigInt                @map("organization_id")
+  roleName             String                @map("role_name") @db.VarChar(40)
+  /// Tope de monto (requested_fee) que este rol puede aprobar en un paso; null = sin tope explícito.
+  maxApprovalAmount    Float?                @map("max_approval_amount")
+  isSystem             Boolean               @default(false) @map("is_system")
+  organization         Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  users                User[]
+  rolePermissions      RolePermission[]
+  rolePermissionGroups RolePermissionGroup[]
+
+  @@unique([organizationId, roleName])
+  @@index([organizationId])
+  @@map("Role")
+}
+
+model Department {
+  departmentId   Int                @id @default(autoincrement()) @map("department_id")
+  organizationId BigInt             @map("organization_id")
+  departmentName String             @map("department_name") @db.VarChar(60)
+  costsCenter    String?            @map("costs_center") @db.VarChar(20)
+  active         Boolean            @default(true)
+  organization   Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  users          User[]
+  empleados      Empleado[]
+  workflowRules  WorkflowRule[]
+  societyId      BigInt?            @map("society_id")
+  society        AccountingSociety? @relation(fields: [societyId], references: [societyId])
+
+  @@unique([organizationId, departmentName])
+  @@index([organizationId, active])
+  @@map("Department")
+}
+
+/// Catálogo de empleados sincronizado desde RH/SAP (adjacency list por no_empleado).
+model Empleado {
+  empleadoId                Int                @id @default(autoincrement()) @map("empleado_id")
+  organizationId            BigInt             @map("organization_id")
+  noEmpleado                String             @map("no_empleado") @db.VarChar(10)
+  nombre                    String             @db.VarChar(100)
+  email                     String?            @db.VarChar(100)
+  jefeInmediato             String?            @map("jefe_inmediato") @db.VarChar(10)
+  proveedor                 String             @db.VarChar(11)
+  ceco                      String             @db.VarChar(10)
+  status                    String             @default("A") @db.VarChar(1)
+  fechaAlta                 DateTime           @map("fecha_alta") @db.Date
+  fechaUltimaModificacion   DateTime           @default(now()) @updatedAt @map("fecha_ultima_modificacion")
+  usuarioUltimaModificacion String             @map("usuario_ultima_modificacion") @db.VarChar(30)
+  organization              Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  users                     User[]
+  societyId                 BigInt?            @map("society_id")
+  departmentId              Int?               @map("department_id")
+  society                   AccountingSociety? @relation(fields: [societyId], references: [societyId])
+  department                Department?        @relation(fields: [departmentId], references: [departmentId])
+
+  @@unique([organizationId, noEmpleado])
+  @@index([organizationId, status])
+  @@index([organizationId, jefeInmediato])
+  @@map("empleado")
+}
+
+/// Mensajes de alerta (templates per-org). is_system marca los defaults intocables.
+model AlertMessage {
+  messageId      Int          @id @default(autoincrement()) @map("message_id")
+  organizationId BigInt       @map("organization_id")
+  messageText    String       @map("message_text") @db.VarChar(255)
+  isSystem       Boolean      @default(false) @map("is_system")
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  alerts         Alert[]
+
+  @@index([organizationId])
+  @@map("AlertMessage")
+}
+
+model User {
+  userId                       Int                      @id @default(autoincrement()) @map("user_id")
+  roleId                       Int?                     @map("role_id")
+  departmentId                 Int?                     @map("department_id")
+  managerUserId                Int?                     @map("manager_user_id")
+  noEmpleado                   String?                  @map("no_empleado") @db.VarChar(10)
+  organizationId               BigInt                   @map("organization_id")
+  userName                     String                   @map("user_name") @db.VarChar(60)
+  password                     String                   @db.VarChar(60)
+  workstation                  String                   @db.VarChar(20)
+  email                        String                   @unique @db.VarChar(254)
+  phoneNumber                  String?                  @map("phone_number") @db.VarChar(254)
+  wallet                       Float                    @default(0.00)
+  creationDate                 DateTime                 @default(now()) @map("creation_date")
+  lastModDate                  DateTime                 @default(now()) @updatedAt @map("last_mod_date")
+  active                       Boolean                  @default(true)
+  organization                 Organization             @relation(fields: [organizationId], references: [id])
+  role                         Role?                    @relation(fields: [roleId], references: [roleId])
+  department                   Department?              @relation(fields: [departmentId], references: [departmentId])
+  manager                      User?                    @relation("UserManager", fields: [managerUserId], references: [userId], onDelete: SetNull)
+  subordinates                 User[]                   @relation("UserManager")
+  empleado                     Empleado?                @relation(fields: [organizationId, noEmpleado], references: [organizationId, noEmpleado])
+  requests                     Request[]
+  solicitudHistorial           SolicitudHistorial[]
+  userPermissions              UserPermission[]
+  userPermissionGroups         UserPermissionGroup[]
+  requestComments              RequestComment[]
+  preference                   UserPreference?
+  notifications                Notification[]
+  pushSubscriptions            PushSubscription[]
+  policyExceptionsRequested    PolicyException[]        @relation("PolicyExceptionRequester")
+  policyExceptionsDecided      PolicyException[]        @relation("PolicyExceptionDecider")
+  reimbursementTimeLimitEdits  ReimbursementTimeLimit[]
+  approvalSubstitutesAsPrimary ApprovalSubstitute[]     @relation("ApprovalSubstitutePrimary")
+  approvalSubstitutesAsBackup  ApprovalSubstitute[]     @relation("ApprovalSubstituteBackup")
+  apiKeysCreated               ApiKey[]
+
+  @@unique([organizationId, userName])
+  @@index([organizationId, active])
+  @@index([organizationId, managerUserId])
+  @@index([organizationId, noEmpleado])
+  @@map("User")
+}
+
+/// User notification preferences. One-to-one with User.
+model UserPreference {
+  userId         Int          @id @map("user_id")
+  organizationId BigInt       @map("organization_id")
+  emailNotif     Boolean      @default(true) @map("email_notif")
+  appNotif       Boolean      @default(true) @map("app_notif")
+  browserNotif   Boolean      @default(true) @map("browser_notif")
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User         @relation(fields: [userId], references: [userId], onDelete: Cascade)
+
+  @@map("user_preference")
+}
+
+/// In-app notification.
+model Notification {
+  notificationId Int          @id @default(autoincrement()) @map("notification_id")
+  userId         Int          @map("user_id")
+  organizationId BigInt       @map("organization_id")
+  message        String       @db.VarChar(255)
+  isRead         Boolean      @default(false) @map("is_read")
+  createdAt      DateTime     @default(now()) @map("created_at")
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User         @relation(fields: [userId], references: [userId], onDelete: Cascade)
+
+  @@index([userId, isRead, createdAt(sort: Desc)])
+  @@index([organizationId, isRead])
+  @@map("notification")
+}
+
+/// Browser push subscription. Web Push API.
+model PushSubscription {
+  id             Int          @id @default(autoincrement())
+  userId         Int          @map("user_id")
+  organizationId BigInt       @map("organization_id")
+  endpoint       String       @db.Text
+  p256dh         String       @db.Text
+  auth           String       @db.Text
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User         @relation(fields: [userId], references: [userId], onDelete: Cascade)
+
+  @@unique([userId, endpoint])
+  @@map("push_subscription")
+}
+
+/// Catálogo GLOBAL — IDs hard-coded en código (máquina de estados).
+model RequestStatus {
+  requestStatusId Int       @id @default(autoincrement()) @map("request_status_id")
+  status          String    @unique @db.VarChar(30)
+  requests        Request[]
+
+  @@map("Request_status")
+}
+
+model Request {
+  requestId                Int                      @id @default(autoincrement()) @map("request_id")
+  userId                   Int?                     @map("user_id")
+  organizationId           BigInt                   @map("organization_id")
+  requestStatusId          Int                      @default(1) @map("request_status_id")
+  notes                    String?                  @db.Text
+  requestedFee             Float?                   @map("requested_fee")
+  imposedFee               Float?                   @map("imposed_fee")
+  requestDays              Float?                   @map("request_days")
+  workflowPreSnapshot      Json?                    @map("workflow_pre_snapshot")
+  workflowPostSnapshot     Json?                    @map("workflow_post_snapshot")
+  tripEndDate              DateTime?                @map("trip_end_date") @db.Date
+  policyEvaluationSnapshot Json?                    @map("policy_evaluation_snapshot")
+  creationDate             DateTime                 @default(now()) @map("creation_date")
+  lastModDate              DateTime                 @default(now()) @updatedAt @map("last_mod_date")
+  active                   Boolean                  @default(true)
+  isExported               Boolean                  @default(false) @map("is_exported")
+  exportedAt               DateTime?                @map("exported_at")
+  organization             Organization             @relation(fields: [organizationId], references: [id])
+  user                     User?                    @relation(fields: [userId], references: [userId])
+  requestStatus            RequestStatus            @relation(fields: [requestStatusId], references: [requestStatusId])
+  alerts                   Alert[]
+  routeRequests            RouteRequest[]
+  receipts                 Receipt[]
+  gastoTramos              GastoTramo[]
+  solicitudHistorial       SolicitudHistorial[]
+  policyExceptions         PolicyException[]
+  anticipoPolizaSnapshots  AnticipoPolizaSnapshot[]
+  accountingPolizas        AccountingPoliza[]
+  requestComments          RequestComment[]
+  /// Oferta de vuelo seleccionada por la agencia (Duffel o mock normalizado).
+  selectedFlightOffer      Json?                    @map("selected_flight_offer")
+  /// Oferta de hospedaje seleccionada por la agencia (Duffel Stays u otro JSON normalizado).
+  selectedHotelOffer       Json?                    @map("selected_hotel_offer")
+
+  @@index([requestStatusId, tripEndDate])
+  @@index([organizationId, requestStatusId])
+  @@map("Request")
+}
+
+model RequestComment {
+  id        Int      @id @default(autoincrement()) @map("id")
+  content   String   @map("content") @db.Text
+  at        DateTime @default(now())
+  userId    Int      @map("user_id")
+  requestId Int      @map("request_id")
+
+  user    User    @relation(fields: [userId], references: [userId], onDelete: Cascade)
+  request Request @relation(fields: [requestId], references: [requestId], onDelete: Cascade)
+
+  @@map("Request_Comment")
+}
+
+// Hard coded for pino log code
+model LogLevel {
+  id          Int     @id @map("id")
+  level       String  @map("level") @db.VarChar(64)
+  description String? @map("description") @db.VarChar(255)
+  log         Log[]
+
+  @@map("Log_Level")
+}
+
+model Log {
+  id      Int      @id @default(autoincrement()) @map("id")
+  service String   @map("service") @db.VarChar(255)
+  levelId Int      @map("level_id")
+  message String   @map("message")
+  context Json     @map("context") @db.JsonB
+  at      DateTime @default(now()) @map("at")
+
+  level LogLevel @relation(fields: [levelId], references: [id], onDelete: NoAction)
+
+  @@index([levelId])
+  @@index([at])
+  @@map("Log")
+}
+
+/// Póliza de anticipo (AV) generada en hitos del ciclo de vida (aprobación de solicitud / comprobación de gastos).
+model AnticipoPolizaSnapshot {
+  id             Int          @id @default(autoincrement()) @map("id")
+  organizationId BigInt       @map("organization_id")
+  requestId      Int          @map("request_id")
+  /// ON_TRAVEL_APPROVED: monto requested_fee. ON_EXPENSES_VERIFIED: monto imposed_fee al finalizar.
+  phase          String       @db.VarChar(40)
+  payload        Json         @map("payload")
+  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  request        Request      @relation(fields: [requestId], references: [requestId], onDelete: Cascade)
+
+  @@unique([requestId, phase], map: "anticipo_poliza_request_phase_unique")
+  @@index([organizationId, createdAt])
+  @@map("anticipo_poliza_snapshot")
+}
+
+enum SolicitudHistorialAccion {
+  APROBADO
+  RECHAZADO
+  ESCALADO
+  REASIGNADO
+
+  @@map("solicitud_historial_accion")
+}
+
+model SolicitudHistorial {
+  historialId    Int                      @id @default(autoincrement()) @map("historial_id")
+  requestId      Int                      @map("request_id")
+  userId         Int                      @map("user_id")
+  organizationId BigInt                   @map("organization_id")
+  accion         SolicitudHistorialAccion @map("accion")
+  comentario     String?                  @db.Text
+  createdAt      DateTime                 @default(now()) @map("created_at")
+  organization   Organization             @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  request        Request                  @relation(fields: [requestId], references: [requestId], onDelete: Cascade)
+  user           User                     @relation(fields: [userId], references: [userId], onDelete: Cascade)
+
+  @@index([requestId, createdAt(sort: Desc)])
+  @@index([organizationId, createdAt(sort: Desc)])
+  @@map("solicitud_historial")
+}
+
+model Alert {
+  alertId        Int           @id @default(autoincrement()) @map("alert_id")
+  requestId      Int?          @map("request_id")
+  messageId      Int?          @map("message_id")
+  organizationId BigInt        @map("organization_id")
+  alertDate      DateTime      @default(now()) @map("alert_date")
+  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  request        Request?      @relation(fields: [requestId], references: [requestId])
+  alertMessage   AlertMessage? @relation(fields: [messageId], references: [messageId])
+
+  @@index([organizationId])
+  @@map("Alert")
+}
+
+/// Catálogo GLOBAL — geográfico.
+model Country {
+  countryId         Int     @id @default(autoincrement()) @map("country_id")
+  countryName       String  @unique @map("country_name") @db.VarChar(60)
+  originRoutes      Route[] @relation("OriginCountry")
+  destinationRoutes Route[] @relation("DestinationCountry")
+
+  @@map("Country")
+}
+
+/// Catálogo GLOBAL — geográfico.
+model City {
+  cityId            Int     @id @default(autoincrement()) @map("city_id")
+  cityName          String  @unique @map("city_name") @db.VarChar(200)
+  originRoutes      Route[] @relation("OriginCity")
+  destinationRoutes Route[] @relation("DestinationCity")
+
+  @@map("City")
+}
+
+model Route {
+  routeId              Int            @id @default(autoincrement()) @map("route_id")
+  organizationId       BigInt         @map("organization_id")
+  idOriginCountry      Int?           @map("id_origin_country")
+  idOriginCity         Int?           @map("id_origin_city")
+  idDestinationCountry Int?           @map("id_destination_country")
+  idDestinationCity    Int?           @map("id_destination_city")
+  routerIndex          Int?           @map("router_index")
+  planeNeeded          Boolean        @default(false) @map("plane_needed")
+  hotelNeeded          Boolean        @default(false) @map("hotel_needed")
+  beginningDate        DateTime?      @map("beginning_date") @db.Date
+  beginningTime        DateTime?      @map("beginning_time") @db.Time(6)
+  endingDate           DateTime?      @map("ending_date") @db.Date
+  endingTime           DateTime?      @map("ending_time") @db.Time(6)
+  organization         Organization   @relation(fields: [organizationId], references: [id])
+  originCountry        Country?       @relation("OriginCountry", fields: [idOriginCountry], references: [countryId])
+  originCity           City?          @relation("OriginCity", fields: [idOriginCity], references: [cityId])
+  destinationCountry   Country?       @relation("DestinationCountry", fields: [idDestinationCountry], references: [countryId])
+  destinationCity      City?          @relation("DestinationCity", fields: [idDestinationCity], references: [cityId])
+  routeRequests        RouteRequest[]
+  gastoTramos          GastoTramo[]
+
+  @@index([organizationId])
+  @@map("Route")
+}
+
+model RouteRequest {
+  routeRequestId Int          @id @default(autoincrement()) @map("route_request_id")
+  requestId      Int?         @map("request_id")
+  routeId        Int?         @map("route_id")
+  organizationId BigInt       @map("organization_id")
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  request        Request?     @relation(fields: [requestId], references: [requestId])
+  route          Route?       @relation(fields: [routeId], references: [routeId])
+
+  @@index([organizationId])
+  @@map("Route_Request")
+}
+
+/// Tipos de comprobante por organización. is_system marca los defaults (Boleto, Hotel, Comidas, Otros).
+model ReceiptType {
+  receiptTypeId      Int                @id @default(autoincrement()) @map("receipt_type_id")
+  organizationId     BigInt             @map("organization_id")
+  receiptTypeName    String             @map("receipt_type_name") @db.VarChar(40)
+  isSystem           Boolean            @default(false) @map("is_system")
+  /// cuenta mayor SAP para línea de gasto (Debe). Si null, usa catálogo org / default.
+  gastoGlAccountCode String?            @map("gasto_gl_account_code") @db.VarChar(10)
+  /// cuenta mayor SAP para IVA acreditable (Debe). Si null, usa catálogo org / default.
+  ivaGlAccountCode   String?            @map("iva_gl_account_code") @db.VarChar(10)
+  organization       Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  receipts           Receipt[]
+  policyExpenseCaps  PolicyExpenseCap[]
+
+  @@unique([organizationId, receiptTypeName])
+  @@index([organizationId])
+  @@map("Receipt_Type")
+}
+
+enum ValidationStatus {
+  Pendiente
+  Aprobado
+  Rechazado
+}
+
+model Receipt {
+  receiptId        Int               @id @default(autoincrement()) @map("receipt_id")
+  receiptTypeId    Int?              @map("receipt_type_id")
+  requestId        Int?              @map("request_id")
+  organizationId   BigInt            @map("organization_id")
+  validation       ValidationStatus  @default(Pendiente)
+  amount           Float
+  refund           Boolean           @default(true)
+  submissionDate   DateTime          @default(now()) @map("submission_date")
+  validationDate   DateTime?         @map("validation_date")
+  pdfFileId        String?           @map("pdf_file_id") @db.VarChar(24)
+  pdfFileName      String?           @map("pdf_file_name") @db.VarChar(255)
+  xmlFileId        String?           @map("xml_file_id") @db.VarChar(24)
+  xmlFileName      String?           @map("xml_file_name") @db.VarChar(255)
+  cfdiUuid         String?           @unique @map("cfdi_uuid") @db.VarChar(36)
+  cfdiVersion      String?           @map("cfdi_version") @db.VarChar(3)
+  cfdiEmisorRfc    String?           @map("cfdi_emisor_rfc") @db.VarChar(13)
+  cfdiReceptorRfc  String?           @map("cfdi_receptor_rfc") @db.VarChar(13)
+  cfdiFecha        DateTime?         @map("cfdi_fecha")
+  cfdiTotal        Float?            @map("cfdi_total")
+  cfdiImpuestos    String?           @map("cfdi_impuestos") @db.Text
+  organization     Organization      @relation(fields: [organizationId], references: [id])
+  receiptType      ReceiptType?      @relation(fields: [receiptTypeId], references: [receiptTypeId])
+  request          Request?          @relation(fields: [requestId], references: [requestId])
+  cfdiComprobante  CfdiComprobante?
+  gastoTramo       GastoTramo?
+  policyExceptions PolicyException[]
+
+  @@index([organizationId, validation])
+  @@map("Receipt")
+}
+
+model CfdiComprobante {
+  cfdiId         Int    @id @default(autoincrement()) @map("cfdi_id")
+  receiptId      Int    @unique @map("receipt_id")
+  organizationId BigInt @map("organization_id")
+
+  uuid          String   @unique @db.VarChar(36)
+  fechaTimbrado DateTime @map("fecha_timbrado")
+  rfcPac        String   @map("rfc_pac") @db.VarChar(13)
+
+  version         String   @default("4.0") @db.VarChar(3)
+  serie           String?  @db.VarChar(25)
+  folio           String?  @db.VarChar(40)
+  fechaEmision    DateTime @map("fecha_emision")
+  /// CFDI: I, E, T, P, N — o valor fijo INTERNACIONAL para recibos extranjeros (sin SAT).
+  tipoComprobante String   @map("tipo_comprobante") @db.VarChar(20)
+  lugarExpedicion String   @map("lugar_expedicion") @db.VarChar(5)
+  exportacion     String   @default("01") @db.VarChar(2)
+  metodoPago      String   @map("metodo_pago") @db.VarChar(3)
+  formaPago       String   @map("forma_pago") @db.VarChar(2)
+  moneda          String   @default("MXN") @db.VarChar(3)
+  tipoCambio      Float    @default(1.0) @map("tipo_cambio")
+  subtotal        Float
+  descuento       Float    @default(0.0)
+  iva             Float    @default(0.0)
+  /// Desglose SAT: traslados y retenciones (001 ISR, 002 IVA, 003 IEPS). Ver `cfdiImpuestos.js`.
+  impuestos       Json?
+  totalRetenidos  Float    @default(0.0) @map("total_retenidos")
+  total           Float
+
+  rfcEmisor           String @map("rfc_emisor") @db.VarChar(13)
+  nombreEmisor        String @map("nombre_emisor") @db.VarChar(254)
+  regimenFiscalEmisor String @map("regimen_fiscal_emisor") @db.VarChar(3)
+
+  rfcReceptor             String @map("rfc_receptor") @db.VarChar(13)
+  nombreReceptor          String @map("nombre_receptor") @db.VarChar(254)
+  domicilioFiscalReceptor String @map("domicilio_fiscal_receptor") @db.VarChar(5)
+  regimenFiscalReceptor   String @map("regimen_fiscal_receptor") @db.VarChar(3)
+  usoCfdi                 String @map("uso_cfdi") @db.VarChar(4)
+
+  satCodigoEstatus      String  @map("sat_codigo_estatus") @db.VarChar(60)
+  satEstado             String  @map("sat_estado") @db.VarChar(20)
+  satEsCancelable       String? @map("sat_es_cancelable") @db.VarChar(40)
+  satEstatusCancelacion String? @map("sat_estatus_cancelacion") @db.VarChar(40)
+  satValidacionEfos     String  @map("sat_validacion_efos") @db.VarChar(3)
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  receipt      Receipt      @relation(fields: [receiptId], references: [receiptId])
+
+  @@index([organizationId])
+  @@map("cfdi_comprobantes")
+}
+
+model GastoTramo {
+  gastoTramoId   Int          @id @default(autoincrement()) @map("gasto_tramo_id")
+  requestId      Int          @map("viaje_id")
+  routeId        Int          @map("tramo_id")
+  receiptId      Int          @unique @map("comprobante_id")
+  organizationId BigInt       @map("organization_id")
+  createdAt      DateTime     @default(now()) @map("created_at")
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  request        Request      @relation(fields: [requestId], references: [requestId])
+  route          Route        @relation(fields: [routeId], references: [routeId])
+  receipt        Receipt      @relation(fields: [receiptId], references: [receiptId])
+
+  @@index([organizationId])
+  @@map("gasto_tramo")
+}
+
+// =====================================================================
+// M2-006 — Motor de reglas de reembolso. `org_id` físico se mantiene; el atributo Prisma se renombra a organizationId via @map.
+// =====================================================================
+
+model EmployeeCategory {
+  categoryId     Int            @id @default(autoincrement()) @map("category_id")
+  organizationId BigInt         @map("org_id")
+  code           String         @db.VarChar(40)
+  name           String         @db.VarChar(80)
+  description    String?        @db.VarChar(254)
+  active         Boolean        @default(true)
+  createdAt      DateTime       @default(now()) @map("created_at")
+  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  policies       TravelPolicy[]
+
+  @@unique([organizationId, code])
+  @@index([organizationId, active])
+  @@map("employee_category")
+}
+
+model TravelPolicy {
+  policyId         Int                @id @default(autoincrement()) @map("policy_id")
+  organizationId   BigInt             @map("org_id")
+  name             String             @db.VarChar(120)
+  categoryId       Int?               @map("category_id")
+  destinationScope String             @default("any") @map("destination_scope") @db.VarChar(20)
+  costsCenter      String?            @map("costs_center") @db.VarChar(20)
+  dailyPerDiem     Decimal?           @map("daily_per_diem") @db.Decimal(18, 4)
+  currency         String             @default("MXN") @db.VarChar(3)
+  validFrom        DateTime           @map("valid_from") @db.Date
+  validTo          DateTime?          @map("valid_to") @db.Date
+  active           Boolean            @default(true)
+  createdAt        DateTime           @default(now()) @map("created_at")
+  updatedAt        DateTime           @default(now()) @updatedAt @map("updated_at")
+  organization     Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  category         EmployeeCategory?  @relation(fields: [categoryId], references: [categoryId])
+  expenseCaps      PolicyExpenseCap[]
+  exceptions       PolicyException[]
+
+  @@index([organizationId, active, validFrom, validTo])
+  @@index([organizationId, costsCenter])
+  @@map("travel_policy")
+}
+
+model PolicyExpenseCap {
+  capId         Int          @id @default(autoincrement()) @map("cap_id")
+  policyId      Int          @map("policy_id")
+  receiptTypeId Int          @map("receipt_type_id")
+  capAmount     Decimal      @map("cap_amount") @db.Decimal(18, 4)
+  capUnit       String       @map("cap_unit") @db.VarChar(20)
+  currency      String       @default("MXN") @db.VarChar(3)
+  policy        TravelPolicy @relation(fields: [policyId], references: [policyId], onDelete: Cascade)
+  receiptType   ReceiptType  @relation(fields: [receiptTypeId], references: [receiptTypeId])
+
+  @@unique([policyId, receiptTypeId, capUnit])
+  @@map("policy_expense_cap")
+}
+
+enum PolicyExceptionStatus {
+  PENDING
+  APPROVED
+  REJECTED
+
+  @@map("policy_exception_status")
+}
+
+model PolicyException {
+  exceptionId    Int                   @id @default(autoincrement()) @map("exception_id")
+  requestId      Int                   @map("request_id")
+  receiptId      Int?                  @map("receipt_id")
+  policyId       Int?                  @map("policy_id")
+  organizationId BigInt                @map("organization_id")
+  capId          Int?                  @map("cap_id")
+  amountClaimed  Decimal               @map("amount_claimed") @db.Decimal(18, 4)
+  amountAllowed  Decimal?              @map("amount_allowed") @db.Decimal(18, 4)
+  excessAmount   Decimal               @map("excess_amount") @db.Decimal(18, 4)
+  justification  String                @db.Text
+  status         PolicyExceptionStatus @default(PENDING)
+  requestedById  Int                   @map("requested_by_id")
+  decidedById    Int?                  @map("decided_by_id")
+  decidedAt      DateTime?             @map("decided_at")
+  decisionNote   String?               @map("decision_note") @db.Text
+  createdAt      DateTime              @default(now()) @map("created_at")
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  request      Request       @relation(fields: [requestId], references: [requestId], onDelete: Cascade)
+  receipt      Receipt?      @relation(fields: [receiptId], references: [receiptId], onDelete: SetNull)
+  policy       TravelPolicy? @relation(fields: [policyId], references: [policyId])
+  requestedBy  User          @relation("PolicyExceptionRequester", fields: [requestedById], references: [userId])
+  decidedBy    User?         @relation("PolicyExceptionDecider", fields: [decidedById], references: [userId])
+
+  @@index([requestId, status])
+  @@index([status, createdAt(sort: Desc)])
+  @@index([organizationId])
+  @@map("policy_exception")
+}
+
+model ReimbursementTimeLimit {
+  limitId        Int          @id @default(autoincrement()) @map("limit_id")
+  organizationId BigInt       @unique @map("org_id")
+  daysAfterTrip  Int          @default(14) @map("days_after_trip")
+  graceDays      Int          @default(0) @map("grace_days")
+  blockOnExpiry  Boolean      @default(true) @map("block_on_expiry")
+  active         Boolean      @default(true)
+  updatedAt      DateTime     @default(now()) @updatedAt @map("updated_at")
+  updatedById    Int?         @map("updated_by_id")
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  updatedBy      User?        @relation(fields: [updatedById], references: [userId])
+
+  @@map("reimbursement_time_limit")
+}
+
+// =====================================================================
+// API keys por organización (M3-004 — panel admin para integraciones).
+// El secreto se devuelve una sola vez al crear; en BD solo vive el SHA-256.
+// =====================================================================
+
+/// Clave API por organización. `keyHash` es SHA-256 hex (64 chars) del secreto;
+/// `scope` es JSON libre con `permissions: string[]` para acotar el consumo.
+model ApiKey {
+  id             Int       @id @default(autoincrement())
+  organizationId BigInt    @map("org_id")
+  keyHash        String    @unique @map("key_hash") @db.VarChar(64)
+  scope          Json
+  expiresAt      DateTime  @map("expires_at")
+  revokedAt      DateTime? @map("revoked_at")
+  createdBy      Int       @map("created_by")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  creator      User         @relation(fields: [createdBy], references: [userId], onDelete: Restrict, onUpdate: Cascade)
+  logs         ApiKeyLog[]
+
+  @@index([organizationId])
+  @@map("api_keys")
+}
+
+/// Auditoría de consumo por clave API (endpoint, código HTTP, instante).
+model ApiKeyLog {
+  id           BigInt   @id @default(autoincrement())
+  keyId        Int      @map("key_id")
+  endpoint     String   @db.Text
+  responseCode Int      @map("response_code")
+  timestamp    DateTime @default(now())
+
+  apiKey ApiKey @relation(fields: [keyId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@index([keyId, timestamp(sort: Desc)])
+  @@map("api_key_logs")
+}
+
+/// Reglas de workflow por organización (M2-004). Evaluación al alta de solicitud nueva.
+model WorkflowRule {
+  id             BigInt       @id @default(autoincrement())
+  organizationId BigInt       @map("org_id")
+  ruleType       String       @map("rule_type") @db.VarChar(10)
+  paramType      String       @map("param_type") @db.VarChar(20)
+  threshold      Decimal?     @db.Decimal(18, 4)
+  paramValue     String?      @map("param_value") @db.VarChar(100)
+  approvalLevel  Int          @map("approval_level")
+  skipIfBelow    Decimal?     @map("skip_if_below") @db.Decimal(18, 4)
+  priority       Int          @default(0)
+  active         Boolean      @default(true)
+  createdAt      DateTime     @default(now()) @map("created_at")
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  departmentId   Int?         @map("department_id")
+  managerSteps   Int?         @map("manager_steps")
+  targetRole     String?      @map("target_role") @db.VarChar(40)
+  department     Department?  @relation(fields: [departmentId], references: [departmentId], onDelete: Cascade)
+
+  @@index([organizationId, ruleType, active])
+  @@map("workflow_rules")
+}
+
+// =====================================================================
+// Permissions — Permission catálogo GLOBAL; groups, role assignments, user assignments son per-org.
+// =====================================================================
+
+model Permission {
+  permissionId Int      @id @default(autoincrement()) @map("permission_id")
+  code         String   @unique @db.VarChar(80)
+  resource     String   @db.VarChar(40)
+  action       String   @db.VarChar(40)
+  description  String?  @db.VarChar(254)
+  active       Boolean  @default(true)
+  creationDate DateTime @default(now()) @map("creation_date")
+  lastModDate  DateTime @default(now()) @updatedAt @map("last_mod_date")
+
+  rolePermissions RolePermission[]
+  userPermissions UserPermission[]
+  groupItems      PermissionGroupItem[]
+
+  @@index([resource, action])
+  @@map("Permission")
+}
+
+model PermissionGroup {
+  groupId        Int      @id @default(autoincrement()) @map("group_id")
+  organizationId BigInt   @map("organization_id")
+  groupName      String   @map("group_name") @db.VarChar(60)
+  description    String?  @db.VarChar(254)
+  active         Boolean  @default(true)
+  isSystem       Boolean  @default(false) @map("is_system")
+  creationDate   DateTime @default(now()) @map("creation_date")
+  lastModDate    DateTime @default(now()) @updatedAt @map("last_mod_date")
+
+  organization Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  items        PermissionGroupItem[]
+  roleGroups   RolePermissionGroup[]
+  userGroups   UserPermissionGroup[]
+
+  @@unique([organizationId, groupName])
+  @@index([organizationId, active])
+  @@map("PermissionGroup")
+}
+
+model PermissionGroupItem {
+  groupId      Int      @map("group_id")
+  permissionId Int      @map("permission_id")
+  creationDate DateTime @default(now()) @map("creation_date")
+
+  group      PermissionGroup @relation(fields: [groupId], references: [groupId], onDelete: Cascade)
+  permission Permission      @relation(fields: [permissionId], references: [permissionId], onDelete: Cascade)
+
+  @@id([groupId, permissionId])
+  @@map("Permission_Group_Item")
+}
+
+model RolePermission {
+  roleId       Int      @map("role_id")
+  permissionId Int      @map("permission_id")
+  creationDate DateTime @default(now()) @map("creation_date")
+
+  role       Role       @relation(fields: [roleId], references: [roleId], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [permissionId], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@map("Role_Permission")
+}
+
+model RolePermissionGroup {
+  roleId       Int      @map("role_id")
+  groupId      Int      @map("group_id")
+  creationDate DateTime @default(now()) @map("creation_date")
+
+  role  Role            @relation(fields: [roleId], references: [roleId], onDelete: Cascade)
+  group PermissionGroup @relation(fields: [groupId], references: [groupId], onDelete: Cascade)
+
+  @@id([roleId, groupId])
+  @@map("Role_Permission_Group")
+}
+
+model UserPermission {
+  userId         Int      @map("user_id")
+  permissionId   Int      @map("permission_id")
+  organizationId BigInt   @map("organization_id")
+  creationDate   DateTime @default(now()) @map("creation_date")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [userId], onDelete: Cascade)
+  permission   Permission   @relation(fields: [permissionId], references: [permissionId], onDelete: Cascade)
+
+  @@id([userId, permissionId])
+  @@index([organizationId])
+  @@map("User_Permission")
+}
+
+model UserPermissionGroup {
+  userId         Int      @map("user_id")
+  groupId        Int      @map("group_id")
+  organizationId BigInt   @map("organization_id")
+  creationDate   DateTime @default(now()) @map("creation_date")
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User            @relation(fields: [userId], references: [userId], onDelete: Cascade)
+  group        PermissionGroup @relation(fields: [groupId], references: [groupId], onDelete: Cascade)
+
+  @@id([userId, groupId])
+  @@index([organizationId])
+  @@map("User_Permission_Group")
+}
+
+// =====================================================================
+// Nuevos modelos multi-tenant.
+// =====================================================================
+
+/// Proveedores per-org (era raw SQL). FK a organizaciones existente.
+model Proveedor {
+  proveedorId    BigInt       @id @default(autoincrement()) @map("proveedor_id")
+  organizationId BigInt       @map("org_id")
+  nombre         String       @db.VarChar(100)
+  razonSocial    String?      @map("razon_social") @db.VarChar(200)
+  rfc            String?      @db.VarChar(13)
+  email          String?      @db.VarChar(254)
+  active         Boolean      @default(true)
+  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, nombre])
+  @@index([organizationId, active])
+  @@map("proveedores")
+}
+
+/// Sustitutos de aprobadores per-org (era raw SQL).
+model ApprovalSubstitute {
+  substituteId   BigInt       @id @default(autoincrement()) @map("substitute_id")
+  organizationId BigInt       @map("organization_id")
+  primaryUserId  Int          @map("primary_user_id")
+  backupUserId   Int          @map("backup_user_id")
+  effectiveFrom  DateTime     @map("effective_from") @db.Date
+  effectiveTo    DateTime?    @map("effective_to") @db.Date
+  reason         String?      @db.Text
+  active         Boolean      @default(true)
+  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  primaryUser    User         @relation("ApprovalSubstitutePrimary", fields: [primaryUserId], references: [userId])
+  backupUser     User         @relation("ApprovalSubstituteBackup", fields: [backupUserId], references: [userId])
+
+  @@index([organizationId, primaryUserId, active])
+  @@map("approval_substitutes")
+}
+
+/// Catálogo contable per-org (RF-74). Reemplaza el hard-code en config/accountingCatalogs.js.
+model ChartOfAccount {
+  accountId       BigInt           @id @default(autoincrement()) @map("account_id")
+  organizationId  BigInt           @map("organization_id")
+  accountCode     String           @map("account_code") @db.VarChar(40)
+  accountName     String           @map("account_name") @db.VarChar(200)
+  accountType     String           @map("account_type") @db.VarChar(40)
+  parentAccountId BigInt?          @map("parent_account_id")
+  active          Boolean          @default(true)
+  isSystem        Boolean          @default(false) @map("is_system")
+  createdAt       DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  organization    Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  parentAccount   ChartOfAccount?  @relation("ChartOfAccountParent", fields: [parentAccountId], references: [accountId])
+  childAccounts   ChartOfAccount[] @relation("ChartOfAccountParent")
+
+  @@unique([organizationId, accountCode])
+  @@index([organizationId, active])
+  @@map("chart_of_accounts")
+}
+
+model AccountingDocType {
+  docTypeId      BigInt       @id @default(autoincrement()) @map("doc_type_id")
+  organizationId BigInt       @map("organization_id")
+  code           String       @db.VarChar(10)
+  name           String       @db.VarChar(120)
+  isSystem       Boolean      @default(false) @map("is_system")
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, code])
+  @@map("accounting_doc_types")
+}
+
+model AccountingSociety {
+  societyId      BigInt       @id @default(autoincrement()) @map("society_id")
+  organizationId BigInt       @map("organization_id")
+  code           String       @db.VarChar(10)
+  name           String       @db.VarChar(120)
+  isSystem       Boolean      @default(false) @map("is_system")
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  departments    Department[]
+  empleados      Empleado[]
+
+  @@unique([organizationId, code])
+  @@map("accounting_societies")
+}
+
+/// Pólizas contables persistidas (AV/GV) tras generación o export; auditoría y GET por id.
+model AccountingPoliza {
+  id                    String       @id @default(cuid())
+  organizationId        BigInt       @map("organization_id")
+  requestId             Int          @map("request_id")
+  polizaIndex           Int          @map("poliza_index")
+  docType               String       @map("doc_type") @db.VarChar(2)
+  payload               Json
+  requestMarkedExported Boolean      @default(false) @map("request_marked_exported")
+  createdAt             DateTime     @default(now()) @map("created_at")
+  organization          Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  request               Request      @relation(fields: [requestId], references: [requestId], onDelete: Cascade)
+
+  @@index([organizationId, createdAt(sort: Desc)])
+  @@index([requestId, polizaIndex])
+  @@map("accounting_poliza")
+}
+
+/// Credenciales de integración per-org (SMTP, Wise, SAT, Banxico, VAPID).
+/// El campo config va encriptado con AES_SECRET_KEY en la capa de service.
+model OrganizationIntegration {
+  integrationId  BigInt       @id @default(autoincrement()) @map("integration_id")
+  organizationId BigInt       @map("organization_id")
+  provider       String       @db.VarChar(40)
+  config         String       @db.Text
+  active         Boolean      @default(true)
+  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  updatedById    Int?         @map("updated_by_id")
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, provider])
+  @@index([organizationId, active])
+  @@map("organization_integrations")
+}
+
+/// Plantillas de notificación per-org (email, push, in-app).
+model NotificationTemplate {
+  templateId     BigInt       @id @default(autoincrement()) @map("template_id")
+  organizationId BigInt       @map("organization_id")
+  code           String       @db.VarChar(60)
+  channel        String       @db.VarChar(10)
+  subject        String?      @db.VarChar(254)
+  body           String       @db.Text
+  locale         String       @default("es-MX") @db.VarChar(10)
+  isSystem       Boolean      @default(false) @map("is_system")
+  active         Boolean      @default(true)
+  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, code, channel, locale])
+  @@index([organizationId, active])
+  @@map("notification_templates")
+}
+
+/// Política de viáticos por organización: topes de hotel y comida (TF-009).
+model ViaticosPolicy {
+  id             Int      @id @default(autoincrement())
+  organizationId BigInt   @unique @map("org_id")
+  maxHotel       Decimal  @map("max_hotel") @db.Decimal(12, 2)
+  maxMeal        Decimal  @map("max_meal") @db.Decimal(12, 2)
+  currency       String   @default("MXN") @db.VarChar(3)
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@map("viaticos_policies")
+}

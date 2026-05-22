@@ -1,0 +1,48 @@
+---
+/**
+ * Request section — editorial card container with header and list of request cards.
+ */
+
+import RequestCard from "@components/RequestCard.astro";
+
+const {
+  title,
+  requests = [],
+  anchor,
+  urlBase,
+  subtitle,
+  emptyMessage = "No hay solicitudes disponibles"
+} = Astro.props;
+---
+
+<section class="card-editorial p-4 sm:p-6">
+  <div class="mb-5 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+    <div class="flex min-w-0 flex-wrap items-baseline gap-2">
+      <h2 class="font-editorial text-lg font-normal text-[var(--color-ink)] sm:text-xl">
+        {title}
+      </h2>
+      <span class="text-sm text-[var(--color-ink-muted)] tabular-nums">
+        ({requests.length})
+      </span>
+    </div>
+    <a href={`/${anchor}`} class="shrink-0 text-sm text-primary-500 transition-colors hover:text-primary-400 self-start sm:self-auto">
+      Ver todas &rarr;
+    </a>
+  </div>
+
+  {requests.length > 0 ? (
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+      {requests.slice(0, 4).map((request: any) => (
+        <RequestCard
+          request={request}
+          urlBase={urlBase}
+          subtitle={subtitle}
+        />
+      ))}
+    </div>
+  ) : (
+    <div class="py-12 text-center">
+      <p class="text-sm text-[var(--color-ink-muted)]">{emptyMessage}</p>
+    </div>
+  )}
+</section>

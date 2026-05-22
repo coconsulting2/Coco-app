@@ -1,0 +1,107 @@
+/**
+ * @module accountingCatalogs
+ * @description Catalogos contables cerrados que no viven en la BD (son propiedad del ERP del cliente).
+ * Mapea los codigos que aparecen en el ejemplo "Polizas contables gastos de Viaje.xlsx".
+ *
+ * Si el cliente migra estos catalogos a tablas reales, reemplazar los objetos por lecturas al modelo.
+ */
+
+/**
+ * Sociedad / Company Code (COMP_CODE).
+ * Formato C(4). Default unica sociedad: Ditta Servicios.
+ */
+export const SOCIEDAD_DEFAULT = "1000";
+
+export const SOCIEDADES = {
+    "1000": { descripcion: "Ditta Servicios", monedaLocal: "MXN" },
+    "2000": { descripcion: "Importadora X", monedaLocal: "MXN" },
+};
+
+/**
+ * Cuentas contables (GL_ACCOUNT).
+ */
+export const GL_ACCOUNTS = {
+    ANTICIPO: "1000",
+    CUENTA_POR_PAGAR_EMPLEADO: "1001",
+    GASTO_DE_VIAJE: "1002",
+    IVA_ACREDITABLE: "1003",
+    RETENCION_ISR: "1004",
+    RETENCION_IVA: "1005",
+    IEPS: "1006",
+};
+
+export const GL_ACCOUNT_DESCRIPTIONS = {
+    "1000": "Anticipo",
+    "1001": "Cuenta x pagar Empleado",
+    "1002": "Gasto de Viaje",
+    "1003": "Iva Acreditable",
+    "1004": "Retencion ISR por pagar",
+    "1005": "Retencion IVA por pagar",
+    "1006": "IEPS / impuesto especial",
+};
+
+/**
+ * Clase de documento (DOC_TYPE).
+ */
+export const DOC_TYPES = {
+    ANTICIPO_VIAJE: "AV",
+    GASTO_VIAJE: "GV",
+};
+
+/**
+ * Indicador debe/haber (SHKZG).
+ */
+export const SHKZG = {
+    DEBE: "S",
+    HABER: "H",
+};
+
+/**
+ * Deriva un numero de proveedor de 11 digitos desde el userId.
+ * Formato visto en el ejemplo: "20000000012" para Emp005 (userId=5 -> 20000000000 + 5).
+ * NOTA: si el cliente aporta una tabla de proveedores real, reemplazar por lectura.
+ *
+ * @param {number} userId
+ * @returns {string} Cadena de 11 digitos.
+ */
+export const proveedorFromUserId = (userId) => {
+    const base = 20000000000n + BigInt(Number(userId));
+    return base.toString().padStart(11, "0").slice(-11);
+};
+
+/**
+ * Formatea una fecha como "DD/MM/YYYY" (formato SAP habitual en las polizas del Excel).
+ * @param {Date} d
+ * @returns {string}
+ */
+export const formatPstngDate = (d) => {
+    const dd = String(d.getDate()).padStart(2, "0");
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const yyyy = d.getFullYear();
+    return `${dd}/${mm}/${yyyy}`;
+};
+
+/**
+ * Defaults exportados como dataset para sembrarlos como filas per-org en las
+ * tablas chart_of_accounts / accounting_doc_types / accounting_societies.
+ * Las constantes arriba se mantienen como fallback en código legacy.
+ */
+export const ACCOUNTING_CATALOG_DEFAULTS = {
+    chartOfAccounts: [
+        { code: "1000", name: GL_ACCOUNT_DESCRIPTIONS["1000"], type: "Anticipo" },
+        { code: "1001", name: GL_ACCOUNT_DESCRIPTIONS["1001"], type: "CxpEmpleado" },
+        { code: "1002", name: GL_ACCOUNT_DESCRIPTIONS["1002"], type: "GastoViaje" },
+        { code: "1003", name: GL_ACCOUNT_DESCRIPTIONS["1003"], type: "Iva" },
+        { code: "1004", name: GL_ACCOUNT_DESCRIPTIONS["1004"], type: "RetencionIsr" },
+        { code: "1005", name: GL_ACCOUNT_DESCRIPTIONS["1005"], type: "RetencionIva" },
+        { code: "1006", name: GL_ACCOUNT_DESCRIPTIONS["1006"], type: "Ieps" },
+    ],
+    docTypes: Object.entries(DOC_TYPES).map(([key, code]) => ({
+        code,
+        name: key.replace(/_/g, " "),
+    })),
+    societies: Object.entries(SOCIEDADES).map(([code, info]) => ({
+        code,
+        name: info.descripcion,
+    })),
+};

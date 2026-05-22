@@ -1,0 +1,55 @@
+import { useCallback } from "react";
+import { apiRequest } from "@utils/apiClient";
+import ModalWrapper from "@components/ModalWrapper";
+import { showAppAlertAsync } from "@utils/appAlert";
+
+interface Props {
+  receipt_id: number;
+  title: string;
+  message: string;
+  redirection: string;
+  modal_type: "success" | "warning";
+  variant?: "filled" | "border" | "empty";
+  children: React.ReactNode;
+  token: string;
+}
+
+export default function ValidateReceiptStatus({
+  receipt_id,
+  title,
+  message,
+  redirection,
+  modal_type,
+  variant,
+  children,
+  token
+}: Props) {
+  const handleConfirm = useCallback(async () => {
+    try {
+      const url = `/accounts-payable/validate-receipt/${receipt_id}`;
+      await apiRequest(url, { method: "PUT", data: {"approval": 1}, headers: { Authorization: `Bearer ${token}` }});
+      await showAppAlertAsync("Comprobante enviado exitosamente.", { variant: "success" });
+
+      if (redirection) {
+        window.location.href = redirection;
+      } else {
+        window.location.reload();
+      }
+    } catch (error) {
+      console.error("Error en la solicitud:", error);
+    }
+  }, [receipt_id, redirection]);
+
+  return (
+    <ModalWrapper
+      title={title}
+      message={message}
+      button_type={modal_type === "warning" ? "danger" : modal_type}
+      modal_type={modal_type}
+      onConfirm={handleConfirm}
+      variant={variant}
+    >
+      {children}
+    </ModalWrapper>
+  );
+}

@@ -1,0 +1,67 @@
+---
+/**
+* Authors: Eduardo Porto Morales
+* Updated: Editorial Finance design system
+*/
+
+import MaterialIcon from "~/shared/ui/MaterialIcon.astro";
+import EditorialHeader from "@components/EditorialHeader.astro";
+import CancelRequestModal from "@components/CancelRequestModal.tsx";
+import { getCookie } from "@data/cookies";
+
+var { userName, requests } = Astro.props;
+const filteredRequests = requests.filter((request: { status: string; }) => request.status === "Borrador");
+requests = filteredRequests;
+---
+
+<div>
+  <main>
+    <EditorialHeader
+      eyebrow="Coco / Borradores"
+      title="Solicitudes en borrador"
+      subtitle={`${userName} — Borradores pendientes de completar`}
+    />
+
+    {requests.length > 0 ? (
+      <section class="card-editorial overflow-hidden">
+        {requests.map((request: any, index: number) => {
+          const isLast = index === requests.length - 1;
+          return (
+            <div class={`px-6 py-4 flex items-center justify-between gap-4 ${!isLast ? 'border-b border-[var(--color-neutral-200)]' : ''} hover:bg-[var(--color-surface-secondary)] transition-colors`}>
+              <a href={`/completar-draft/${request.request_id}`} class="flex items-center gap-4 flex-1 min-w-0">
+                <span class="font-editorial text-lg text-[var(--color-ink-muted)] tabular-nums w-6 text-right">
+                  {String(index + 1).padStart(2, '0')}
+                </span>
+                <div class="flex-1 min-w-0">
+                  <p class="font-medium text-[var(--color-ink)] truncate">
+                    #{request.request_id} &middot; {request.destination_country === 'notSelected' ? 'Destino pendiente' : request.destination_country}
+                  </p>
+                  <p class="text-xs text-[var(--color-ink-muted)] mt-0.5">
+                    {request.beginning_date === "1900-01-01" ? 'Fechas pendientes' : `${request.beginning_date} — ${request.ending_date}`}
+                  </p>
+                </div>
+              </a>
+
+              <span class="status-pill status-pill--review">Borrador</span>
+
+              <CancelRequestModal
+                client:only="react"
+                id={request.request_id}
+                disabled={false}
+                token={getCookie("token", Astro.cookies)}
+              >
+                <div class="p-1.5 rounded-[var(--radius-md)] text-[var(--color-ink-muted)] hover:bg-accent-50 hover:text-accent-400 transition-colors cursor-pointer">
+                  <MaterialIcon icon="delete" color="currentColor" />
+                </div>
+              </CancelRequestModal>
+            </div>
+          );
+        })}
+      </section>
+    ) : (
+      <div class="card-editorial py-16 text-center">
+        <p class="text-[var(--color-ink-muted)]">No tienes borradores de solicitudes</p>
+      </div>
+    )}
+  </main>
+</div>

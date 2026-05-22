@@ -1,0 +1,69 @@
+---
+/**
+ * Author: Julia Maria Stephanie Duenkelsbuehler Castillo
+ * Updated: Editorial Finance design system + Notification Bell (M3-006)
+ *
+ * Top navigation bar — clean, minimal, 1px bottom border.
+ */
+
+const { userName, buttonLabel } = Astro.props;
+import LogoutButton from "@components/Logout.tsx";
+import MaterialIcon from "@components/MaterialIcon.astro";
+import NotificationBell from "@components/NotificationBell.tsx";
+import { getCookie } from "@data/cookies";
+
+const isCurrentRoute = Astro.url.pathname === "/perfil-usuario";
+const userId = getCookie("id", Astro.cookies);
+---
+
+<header class="flex min-h-14 flex-wrap items-center justify-between gap-x-2 gap-y-1 border-b border-[var(--color-neutral-200)] bg-[var(--color-surface-white)] px-3 py-2 sm:px-4 md:h-14 md:flex-nowrap md:gap-x-3 md:px-6 md:py-0">
+  <!-- Left: Hamburger (mobile) + Logo + Brand -->
+  <div class="flex min-w-0 flex-1 items-center gap-2 sm:gap-3 md:min-w-[auto] md:flex-none">
+    <button id="menu-btn" class="md:hidden flex items-center justify-center w-11 h-11 rounded-[var(--radius-md)] hover:bg-[var(--color-surface-secondary)] transition-colors">
+      <MaterialIcon icon="menu" color="currentColor" />
+    </button>
+    <a href="/dashboard" class="flex items-center gap-2.5">
+      <img
+        src="/Logo.svg"
+        class="w-9 h-9"
+        alt="CocoAPI"
+      />
+      <span class="eyebrow text-[var(--color-ink)] tracking-widest font-semibold hidden sm:block">COCOAPI</span>
+    </a>
+  </div>
+
+  <!-- Right: Role + Actions + User -->
+  <div class="flex shrink-0 items-center gap-1.5 sm:gap-2 md:gap-3">
+    <!-- Rol: solo desde lg para no pisar logo/cierre en móvil-tablet -->
+    <span class="status-pill hidden max-w-[10rem] truncate border border-[var(--color-neutral-200)] bg-[var(--color-surface-secondary)] text-[var(--color-ink-secondary)] lg:inline-flex" title={buttonLabel}>
+      {buttonLabel}
+    </span>
+
+    <!-- Actions -->
+    <div class="flex items-center gap-0.5 sm:gap-1">
+      <NotificationBell client:load userId={userId} />
+      <LogoutButton client:load>
+        <div class="p-2 rounded-[var(--radius-md)] text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-secondary)] hover:text-[var(--color-ink)] transition-colors cursor-pointer">
+          <MaterialIcon icon="logout" color="currentColor" />
+        </div>
+      </LogoutButton>
+    </div>
+
+    <!-- User Info -->
+    <div class="flex items-center gap-2 border-[var(--color-neutral-200)] pl-1 sm:gap-3 sm:border-l sm:pl-2 md:pl-3">
+      <span class="text-sm font-medium text-[var(--color-ink)] hidden md:block">
+        {userName}
+      </span>
+      <a href="/perfil-usuario" class={isCurrentRoute ? "pointer-events-none" : ""}>
+        <div
+          class="flex items-center justify-center rounded-full w-9 h-9 bg-primary-500 text-white cursor-pointer transition-all duration-200 hover:bg-primary-400"
+        >
+          <span class="text-xs font-semibold">
+            {userName.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase()}
+          </span>
+        </div>
+      </a>
+    </div>
+  </div>
+</header>
+

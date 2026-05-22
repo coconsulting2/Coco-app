@@ -1,0 +1,135 @@
+# Release stack: imagen production de coco-app + Postgres + Mongo + LocalStack.
+# Single image, single port, todo unificado (front + back juntos).
+#
+# Override secrets via `.env` (AES_SECRET_KEY, JWT_SECRET, SESSION_SECRET, mail).
+#
+#   docker compose up -d
+#
+# La imagen `coco-app` puede publicarse a GHCR como
+# ghcr.io/coconsulting2/coco-app:latest cuando exista el workflow.
+name: coco-app
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: cocoscheme
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cocoscheme_dev}
+      POSTGRES_DB: CocoScheme
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cocoscheme -d CocoScheme"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - cocoscheme
+
+  mongo:
+    image: mongo:7
+    command: ["mongod", "--quiet", "--logpath", "/dev/null"]
+    volumes:
+      - mongodata:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.runCommand({ ping: 1 }).ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    logging:
+      driver: none
+    networks:
+      - cocoscheme
+
+  # Para uploads de receipts (GridFS sigue siendo MongoDB; S3 es solo para
+  # objetos no-CFDI / exports). En prod real, omitir localstack y apuntar el
+  # SDK a AWS regional. Aquí incluido para que el stack sea ejecutable standalone.
+  localstack:
+    image: localstack/localstack:3.5
+    environment:
+      SERVICES: s3
+      DEBUG: "0"
+    volumes:
+      - localstack_data:/var/lib/localstack
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    networks:
+      - cocoscheme
+
+  s3-init:
+    image: amazon/aws-cli:2.17.54
+    depends_on:
+      localstack:
+        condition: service_healthy
+    environment:
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: us-east-1
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        aws --endpoint-url=http://localstack:4566 s3 mb s3://coco-consulting 2>/dev/null || true
+    networks:
+      - cocoscheme
+
+  coco-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    # Cuando se publique en GHCR, reemplazar `build:` por:
+    # image: ghcr.io/coconsulting2/coco-app:latest
+    # pull_policy: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+      s3-init:
+        condition: service_completed_successfully
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: "5173"
+      DATABASE_URL: postgresql://cocoscheme:${POSTGRES_PASSWORD:-cocoscheme_dev}@postgres:5432/CocoScheme?schema=public
+      MONGO_URI: mongodb://mongo:27017
+      AES_SECRET_KEY: ${AES_SECRET_KEY:-12345678901234567890123456789012}
+      JWT_SECRET: ${JWT_SECRET:-dev_jwt_secret_change_me}
+      SESSION_SECRET: ${SESSION_SECRET:-dev_session_secret_change_me}
+      MAIL_USER: ${MAIL_USER:-test.mail@outlook.com}
+      MAIL_PASSWORD: ${MAIL_PASSWORD:-changeme}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_S3_BUCKET: ${AWS_S3_BUCKET:-coco-consulting}
+      AWS_S3_ENDPOINT: ${AWS_S3_ENDPOINT:-http://localstack:4566}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-test}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-test}
+      RUN_MIGRATIONS: "true"
+      SEED_DUMMY_DATA: "true"
+      SCHEDULER_ENABLED: "true"
+      FLIGHT_PROVIDER: ${FLIGHT_PROVIDER:-mock}
+      HOTEL_PROVIDER: ${HOTEL_PROVIDER:-mock}
+      CHAT_CURSOR_SECRET: ${CHAT_CURSOR_SECRET:-0000000000000000000000000000000000000000000000000000000000000000}
+      CHAT_MESSAGE_SECRET: ${CHAT_MESSAGE_SECRET:-0000000000000000000000000000000000000000000000000000000000000000}
+    volumes:
+      - certs:/app/certs
+    ports:
+      - "5173:5173"
+    networks:
+      - cocoscheme
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  mongodata:
+  certs:
+  localstack_data:
+
+networks:
+  cocoscheme:
+    driver: bridge
