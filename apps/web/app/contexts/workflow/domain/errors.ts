@@ -20,3 +20,15 @@ export class InvalidWorkflowConfigError extends WorkflowError {
 export class EscalationDeadlineMissedError extends WorkflowError {
   constructor(message?: string) { super(message ?? "EscalationDeadlineMissedError", "ESCALATIONDEADLINEMISSED"); }
 }
+
+export class RequestCommentInvalidActorError extends WorkflowError {
+  constructor(message?: string) {
+    super(message ?? "Invalid user or request id for comment", "REQUESTCOMMENTINVALIDACTOR", 400);
+  }
+}
+
+export class RequestCommentCursorTamperedError extends WorkflowError {
+  constructor(message?: string) {
+    super(message ?? "Tampered comment cursor", "REQUESTCOMMENTCURSORTAMPERED", 400);
+  }
+}

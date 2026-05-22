@@ -1,18 +1,31 @@
-import { useCallback, useState } from "react";
-import { apiRequest } from "@utils/apiClient";
+/**
+ * @module TravelRequestAuthorizeActions
+ * @description Acciones N1/N2 (aprobar/rechazar/reasignar) sobre una
+ * solicitud. Usa `useFetcher` para POSTear al action del route padre
+ * (`autorizar-solicitud.$id.tsx`) — sin clientes HTTP a endpoints internos
+ * para cumplir la regla de aislamiento de shared/ui.
+ */
+import { useEffect, useState } from "react";
+import { useFetcher } from "react-router";
 import Modal from "@components/Modal";
 import Toast from "@components/Toast";
 import { getButtonClasses } from "@type/button";
 
 interface Props {
   request_id: number;
-  token: string;
+  /** Detalle opcional para mostrar contexto (el route padre lo carga en loader). */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  request?: any;
 }
+
+type FetcherActionResult =
+  | { ok: true }
+  | { ok: false; error: string; code?: string };
 
 export default function TravelRequestAuthorizeActions({
   request_id,
-  token,
 }: Props) {
+  const fetcher = useFetcher<FetcherActionResult>();
   const [toast, setToast] = useState<{
     message: string;
     type: "success" | "error";
@@ -24,44 +37,36 @@ export default function TravelRequestAuthorizeActions({
   const [targetUserId, setTargetUserId] = useState("");
   const [motivo, setMotivo] = useState("");
 
-  const redirectDashboard = () => {
-    window.location.href = "/dashboard";
-  };
-
-  const handleApprove = useCallback(async () => {
-    try {
-      await apiRequest(`/solicitudes/${request_id}/aprobar`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
-        data: {},
-      });
+  // Reacciona a la respuesta del action — el redirect a /dashboard lo maneja
+  // RR automáticamente; aquí solo gestionamos errores y el feedback de reassign.
+  useEffect(() => {
+    if (fetcher.state !== "idle" || !fetcher.data) return;
+    if (fetcher.data.ok) {
       setApproveOpen(false);
-      setToast({
-        message: "Solicitud actualizada correctamente.",
-        type: "success",
-      });
-      await new Promise((r) => setTimeout(r, 1500));
-      redirectDashboard();
-    } catch (error) {
-      console.error(error);
-      const detail =
-        error &&
-        typeof error === "object" &&
-        "detail" in error
-          ? (error as { detail?: { response?: { error?: string } } }).detail
-          : undefined;
-      const msg =
-        detail?.response && typeof detail.response === "object" &&
-        detail.response !== null &&
-        "error" in detail.response &&
-        typeof (detail.response as { error?: string }).error === "string"
-          ? (detail.response as { error: string }).error
-          : "No se pudo completar la acción.";
-      setToast({ message: msg, type: "error" });
+      setRejectOpen(false);
+      setReassignOpen(false);
+      setComment("");
+      setTargetUserId("");
+      setMotivo("");
+      setToast({ message: "Acción completada.", type: "success" });
+    } else {
+      setToast({ message: fetcher.data.error, type: "error" });
     }
-  }, [request_id, token]);
+  }, [fetcher.state, fetcher.data]);
 
-  const handleRejectConfirm = useCallback(async () => {
+  const submitting = fetcher.state !== "idle";
+
+  function submit(formData: FormData) {
+    fetcher.submit(formData, { method: "post" });
+  }
+
+  function handleApprove() {
+    const fd = new FormData();
+    fd.set("intent", "approve");
+    submit(fd);
+  }
+
+  function handleReject() {
     const c = comment.trim();
     if (!c) {
       setToast({
@@ -70,37 +75,13 @@ export default function TravelRequestAuthorizeActions({
       });
       return;
     }
-    try {
-      await apiRequest(`/solicitudes/${request_id}/rechazar`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
-        data: { comentario: c },
-      });
-      setRejectOpen(false);
-      setComment("");
-      setToast({ message: "Solicitud rechazada.", type: "success" });
-      await new Promise((r) => setTimeout(r, 1500));
-      redirectDashboard();
-    } catch (error) {
-      console.error(error);
-      const detail =
-        error &&
-        typeof error === "object" &&
-        "detail" in error
-          ? (error as { detail?: { response?: { error?: string } } }).detail
-          : undefined;
-      const msg =
-        detail?.response && typeof detail.response === "object" &&
-        detail.response !== null &&
-        "error" in detail.response &&
-        typeof (detail.response as { error?: string }).error === "string"
-          ? (detail.response as { error: string }).error
-          : "No se pudo rechazar la solicitud.";
-      setToast({ message: msg, type: "error" });
-    }
-  }, [request_id, token, comment]);
+    const fd = new FormData();
+    fd.set("intent", "reject");
+    fd.set("comentario", c);
+    submit(fd);
+  }
 
-  const handleReassign = useCallback(async () => {
+  function handleReassign() {
     const uid = Number(targetUserId.trim());
     const m = motivo.trim();
     if (!Number.isFinite(uid) || uid < 1) {
@@ -114,34 +95,12 @@ export default function TravelRequestAuthorizeActions({
       setToast({ message: "El motivo es obligatorio.", type: "error" });
       return;
     }
-    try {
-      await apiRequest(`/solicitudes/${request_id}/reasignar`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
-        data: { userId: uid, motivo: m },
-      });
-      setReassignOpen(false);
-      setTargetUserId("");
-      setMotivo("");
-      setToast({ message: "Tarea reasignada.", type: "success" });
-    } catch (error) {
-      console.error(error);
-      const detail =
-        error &&
-        typeof error === "object" &&
-        "detail" in error
-          ? (error as { detail?: { response?: { error?: string } } }).detail
-          : undefined;
-      const msg =
-        detail?.response && typeof detail.response === "object" &&
-        detail.response !== null &&
-        "error" in detail.response &&
-        typeof (detail.response as { error?: string }).error === "string"
-          ? (detail.response as { error: string }).error
-          : "No se pudo reasignar.";
-      setToast({ message: msg, type: "error" });
-    }
-  }, [request_id, token, targetUserId, motivo]);
+    const fd = new FormData();
+    fd.set("intent", "reassign");
+    fd.set("targetUserId", String(uid));
+    fd.set("motivo", m);
+    submit(fd);
+  }
 
   const btnPrimary = getButtonClasses({
     variant: "filled",
@@ -165,6 +124,7 @@ export default function TravelRequestAuthorizeActions({
         <button
           type="button"
           className={btnPrimary}
+          disabled={submitting}
           onClick={() => setApproveOpen(true)}
         >
           Aceptar
@@ -172,6 +132,7 @@ export default function TravelRequestAuthorizeActions({
         <button
           type="button"
           className={btnDanger}
+          disabled={submitting}
           onClick={() => setRejectOpen(true)}
         >
           Rechazar
@@ -179,6 +140,7 @@ export default function TravelRequestAuthorizeActions({
         <button
           type="button"
           className={btnNeutral}
+          disabled={submitting}
           onClick={() => setReassignOpen(true)}
         >
           Reasignar
@@ -187,12 +149,12 @@ export default function TravelRequestAuthorizeActions({
 
       <Modal
         title="Confirmar autorización"
-        message="¿Está seguro de que desea autorizar esta solicitud?"
+        message={`¿Está seguro de que desea autorizar la solicitud #${request_id}?`}
         type="success"
         show={approveOpen}
         onClose={() => setApproveOpen(false)}
         onConfirm={handleApprove}
-        confirmLabel="Confirmar"
+        confirmLabel={submitting ? "Procesando..." : "Confirmar"}
       />
 
       <Modal
@@ -204,10 +166,13 @@ export default function TravelRequestAuthorizeActions({
           setRejectOpen(false);
           setComment("");
         }}
-        onConfirm={handleRejectConfirm}
-        confirmLabel="Rechazar"
+        onConfirm={handleReject}
+        confirmLabel={submitting ? "Procesando..." : "Rechazar"}
       >
-        <label className="block text-sm text-[var(--color-ink-secondary)] mb-1" htmlFor="reject-comment">
+        <label
+          className="block text-sm text-[var(--color-ink-secondary)] mb-1"
+          htmlFor="reject-comment"
+        >
           Comentario
         </label>
         <textarea
@@ -230,9 +195,12 @@ export default function TravelRequestAuthorizeActions({
           setMotivo("");
         }}
         onConfirm={handleReassign}
-        confirmLabel="Guardar"
+        confirmLabel={submitting ? "Procesando..." : "Guardar"}
       >
-        <label className="block text-sm text-[var(--color-ink-secondary)] mb-1" htmlFor="reassign-user">
+        <label
+          className="block text-sm text-[var(--color-ink-secondary)] mb-1"
+          htmlFor="reassign-user"
+        >
           ID usuario destino
         </label>
         <input
@@ -243,7 +211,10 @@ export default function TravelRequestAuthorizeActions({
           value={targetUserId}
           onChange={(e) => setTargetUserId(e.target.value)}
         />
-        <label className="block text-sm text-[var(--color-ink-secondary)] mb-1" htmlFor="reassign-motivo">
+        <label
+          className="block text-sm text-[var(--color-ink-secondary)] mb-1"
+          htmlFor="reassign-motivo"
+        >
           Motivo
         </label>
         <textarea

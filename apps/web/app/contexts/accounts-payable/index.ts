@@ -14,3 +14,23 @@ export { attendTravelRequest, validateReceipts, getExpenseValidations } from "~/
 export { exportPolizaByRequest, exportPolizasByRange, buildAnticipoPolizaForAdvance } from "~/contexts/accounts-payable/application/accountingExportService.js";
 // @ts-ignore — JS module
 export { resolveGlCatalog, resolveCompCode, costCenterRequiredAccountsFor } from "~/contexts/accounts-payable/application/polizaCatalogService.js";
+
+// ── Use-case hexagonal: confirmar imposed_fee en cotización CxP ──────────
+export type {
+  ConfirmImposedFeeInput,
+  ConfirmImposedFeeResult,
+} from "~/contexts/accounts-payable/application/confirmImposedFee.js";
+export type { CxpAttendRepository } from "~/contexts/accounts-payable/domain/ports/CxpAttendRepository.js";
+
+import { PrismaCxpAttendRepository } from "~/contexts/accounts-payable/infrastructure/PrismaCxpAttendRepository.js";
+import * as confirmImposedFeeModule from "~/contexts/accounts-payable/application/confirmImposedFee.js";
+export { CxpRequestNotFoundError } from "~/contexts/accounts-payable/application/confirmImposedFee.js";
+
+const defaultCxpAttendRepo = new PrismaCxpAttendRepository();
+
+export const confirmImposedFee = (
+  input: confirmImposedFeeModule.ConfirmImposedFeeInput,
+) =>
+  confirmImposedFeeModule.confirmImposedFee(input, {
+    attendRepo: defaultCxpAttendRepo,
+  });

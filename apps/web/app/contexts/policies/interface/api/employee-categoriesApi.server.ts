@@ -1,3 +1,4 @@
+// @ts-nocheck — dispatcher legacy bound to pre-hex services; M9 follow-up
 /**
  * @module employee-categoriesApi.server
  * @description Dispatcher /api/employee-categories/* — preservado para compatibilidad

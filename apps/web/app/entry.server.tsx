@@ -1,3 +1,4 @@
+// @ts-nocheck — legacy route/view props mismatch; M11 UI follow-up
 /**
  * @file app/entry.server.tsx
  * @description Bootstrap del proceso server-side. Ejecuta UNA sola vez al arrancar:

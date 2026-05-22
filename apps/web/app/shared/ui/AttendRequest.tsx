@@ -1,9 +1,15 @@
-import { useCallback, useMemo, useState } from "react";
-import { apiRequest } from "@utils/apiClient";
+/**
+ * @module AttendRequest
+ * @description UI de Agencia para cotizar vuelos + hospedaje vía Duffel y
+ * finalizar la atención. Usa `useFetcher` para POSTear al action del route
+ * padre `atender-solicitud.$id.tsx`. Búsqueda y selección de ofertas, así
+ * como la finalización, se hacen sin clientes HTTP a endpoints internos.
+ */
+import { useEffect, useMemo, useState } from "react";
+import { useFetcher } from "react-router";
 import ModalWrapper from "@components/ModalWrapper";
 import Toast from "@components/Toast";
 import { showAppAlert } from "@utils/appAlert";
-import type { FlightSearchDefaults } from "@utils/travelRequestAgency";
 
 const IATA_SUGGESTIONS = [
   "MEX",
@@ -66,56 +72,97 @@ export type HotelSearchDefaults = {
   huespedes: number;
 };
 
+export type FlightSearchDefaults = {
+  fecha: string;
+  pasajeros: number;
+};
+
 interface Props {
-  request_id: string;
-  token: string;
-  /** Si la solicitud incluye tramos con avión. Por defecto true (compatibilidad). */
+  requestId: number;
   needsPlane?: boolean;
-  /** Si la solicitud incluye tramos con hotel. */
   needsHotel?: boolean;
-  /** Valores iniciales para búsqueda de hospedaje (p. ej. destino y fechas del tramo). */
-  hotelSearchDefaults?: HotelSearchDefaults | null;
-  /** Valores iniciales para búsqueda de vuelo desde tramos de la solicitud. */
-  flightSearchDefaults?: FlightSearchDefaults | null;
+  hotelDefaults?: HotelSearchDefaults | null;
+  flightDefaults?: FlightSearchDefaults | null;
 }
 
+type FetcherData =
+  | { ok: true; intent: "searchFlights"; offers: NormalizedFlightOffer[] }
+  | { ok: true; intent: "searchHotels"; offers: NormalizedHotelOffer[] }
+  | { ok: true; intent: "selectFlight" }
+  | { ok: true; intent: "selectHotel"; saved: NormalizedHotelOffer }
+  | { ok: false; intent: string; error: string };
+
 export default function AttendRequest({
-  request_id,
-  token,
+  requestId,
   needsPlane = true,
   needsHotel = false,
-  hotelSearchDefaults = null,
-  flightSearchDefaults = null,
+  hotelDefaults = null,
+  flightDefaults = null,
 }: Props) {
-  const [origen, setOrigen] = useState(() => flightSearchDefaults?.origen ?? "MEX");
-  const [destino, setDestino] = useState(() => flightSearchDefaults?.destino ?? "CUN");
+  const fetcher = useFetcher<FetcherData>();
+
+  const [origen, setOrigen] = useState("MEX");
+  const [destino, setDestino] = useState("CUN");
   const [fecha, setFecha] = useState(
-    () => flightSearchDefaults?.fecha ?? new Date().toISOString().slice(0, 10),
+    () => flightDefaults?.fecha ?? new Date().toISOString().slice(0, 10),
   );
-  const [fechaRegreso, setFechaRegreso] = useState(
-    () => flightSearchDefaults?.fecha_regreso ?? "",
-  );
-  const [pasajeros, setPasajeros] = useState(() => flightSearchDefaults?.pasajeros ?? 1);
-  const [searching, setSearching] = useState(false);
+  const [fechaRegreso, setFechaRegreso] = useState("");
+  const [pasajeros, setPasajeros] = useState(() => flightDefaults?.pasajeros ?? 1);
   const [offers, setOffers] = useState<NormalizedFlightOffer[]>([]);
   const [selected, setSelected] = useState<NormalizedFlightOffer | null>(null);
-  const [savingOffer, setSavingOffer] = useState(false);
 
-  const [hotelCiudad, setHotelCiudad] = useState(() => hotelSearchDefaults?.ciudad ?? "");
+  const [hotelCiudad, setHotelCiudad] = useState(() => hotelDefaults?.ciudad ?? "");
   const [hotelCheckIn, setHotelCheckIn] = useState(
-    () => hotelSearchDefaults?.fecha_entrada ?? new Date().toISOString().slice(0, 10),
+    () => hotelDefaults?.fecha_entrada ?? new Date().toISOString().slice(0, 10),
   );
   const [hotelCheckOut, setHotelCheckOut] = useState(
-    () => hotelSearchDefaults?.fecha_salida ?? new Date().toISOString().slice(0, 10),
+    () => hotelDefaults?.fecha_salida ?? new Date().toISOString().slice(0, 10),
   );
-  const [hotelHuespedes, setHotelHuespedes] = useState(() => hotelSearchDefaults?.huespedes ?? 1);
-  const [searchingHotels, setSearchingHotels] = useState(false);
+  const [hotelHuespedes, setHotelHuespedes] = useState(() => hotelDefaults?.huespedes ?? 1);
   const [hotelOffers, setHotelOffers] = useState<NormalizedHotelOffer[]>([]);
   const [selectedHotel, setSelectedHotel] = useState<NormalizedHotelOffer | null>(null);
-  const [savingHotel, setSavingHotel] = useState(false);
 
-  const [submitting, setSubmitting] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
+
+  // Reacciona a la respuesta del action según el `intent` retornado.
+  useEffect(() => {
+    if (fetcher.state !== "idle" || !fetcher.data) return;
+    const data = fetcher.data;
+    if (!data.ok) {
+      showAppAlert(data.error, { variant: "error" });
+      return;
+    }
+    if (data.intent === "searchFlights") {
+      setOffers(data.offers);
+      if (!data.offers.length) {
+        showAppAlert("No se encontraron vuelos para esos criterios.", { variant: "info" });
+      }
+      return;
+    }
+    if (data.intent === "searchHotels") {
+      setHotelOffers(data.offers);
+      if (!data.offers.length) {
+        showAppAlert("No se encontraron opciones de hospedaje para esos criterios.", {
+          variant: "info",
+        });
+      }
+      return;
+    }
+    if (data.intent === "selectFlight") {
+      setToast({ message: "Oferta de vuelo guardada en la solicitud.", type: "success" });
+      return;
+    }
+    if (data.intent === "selectHotel") {
+      setSelectedHotel(data.saved);
+      setToast({ message: "Opción de hospedaje guardada en la solicitud.", type: "success" });
+    }
+  }, [fetcher.state, fetcher.data]);
+
+  const submitting = fetcher.state !== "idle";
+
+  function submit(formData: FormData) {
+    fetcher.submit(formData, { method: "post" });
+  }
 
   const origenList = useMemo(
     () => IATA_SUGGESTIONS.filter((c) => c.includes(origen.toUpperCase()) || origen.length < 2),
@@ -136,36 +183,18 @@ export default function AttendRequest({
     return "Busca y guarda la cotización de vuelo antes de finalizar la atención.";
   }, [needsPlane, needsHotel]);
 
-  const buscarVuelos = useCallback(async () => {
-    setSearching(true);
-    setOffers([]);
-    try {
-      const res = await apiRequest<{ offers: NormalizedFlightOffer[] }>("/flights/search", {
-        method: "POST",
-        data: {
-          origen: origen.toUpperCase().slice(0, 3),
-          destino: destino.toUpperCase().slice(0, 3),
-          fecha,
-          ...(fechaRegreso.trim() ? { fecha_regreso: fechaRegreso.trim() } : {}),
-          pasajeros,
-        },
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      setOffers(res.offers ?? []);
-      if (!res.offers?.length) {
-        showAppAlert("No se encontraron vuelos para esos criterios.", { variant: "info" });
-      }
-    } catch (e) {
-      console.error(e);
-      showAppAlert("No se pudo buscar vuelos. Verifica permisos de agencia o el backend.", {
-        variant: "error",
-      });
-    } finally {
-      setSearching(false);
-    }
-  }, [origen, destino, fecha, fechaRegreso, pasajeros, token]);
+  function buscarVuelos() {
+    const fd = new FormData();
+    fd.set("intent", "searchFlights");
+    fd.set("origen", origen);
+    fd.set("destino", destino);
+    fd.set("fecha", fecha);
+    if (fechaRegreso.trim()) fd.set("fechaRegreso", fechaRegreso.trim());
+    fd.set("pasajeros", String(pasajeros));
+    submit(fd);
+  }
 
-  const buscarHoteles = useCallback(async () => {
+  function buscarHoteles() {
     const ciudad = hotelCiudad.trim();
     if (ciudad.length < 2) {
       showAppAlert("Indica la ciudad o zona de hospedaje (al menos 2 caracteres).", {
@@ -173,98 +202,31 @@ export default function AttendRequest({
       });
       return;
     }
-    setSearchingHotels(true);
-    setHotelOffers([]);
-    try {
-      const res = await apiRequest<{ offers: NormalizedHotelOffer[] }>("/hotels/search", {
-        method: "POST",
-        data: {
-          ciudad,
-          fecha_entrada: hotelCheckIn,
-          fecha_salida: hotelCheckOut,
-          huespedes: hotelHuespedes,
-        },
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      setHotelOffers(res.offers ?? []);
-      if (!res.offers?.length) {
-        showAppAlert("No se encontraron opciones de hospedaje para esos criterios.", {
-          variant: "info",
-        });
-      }
-    } catch (e) {
-      console.error(e);
-      showAppAlert("No se pudo buscar hospedaje. Verifica permisos de agencia o el backend.", {
-        variant: "error",
-      });
-    } finally {
-      setSearchingHotels(false);
-    }
-  }, [hotelCiudad, hotelCheckIn, hotelCheckOut, hotelHuespedes, token]);
+    const fd = new FormData();
+    fd.set("intent", "searchHotels");
+    fd.set("ciudad", ciudad);
+    fd.set("fechaEntrada", hotelCheckIn);
+    fd.set("fechaSalida", hotelCheckOut);
+    fd.set("huespedes", String(hotelHuespedes));
+    submit(fd);
+  }
 
-  const seleccionarOferta = useCallback(
-    async (offer: NormalizedFlightOffer) => {
-      setSavingOffer(true);
-      try {
-        await apiRequest(`/travel-agent/travel-request/${request_id}/selected-flight`, {
-          method: "PUT",
-          data: { offer },
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        setSelected(offer);
-        setToast({ message: "Oferta de vuelo guardada en la solicitud.", type: "success" });
-      } catch (e) {
-        console.error(e);
-        showAppAlert("No se pudo guardar la oferta de vuelo.", { variant: "error" });
-      } finally {
-        setSavingOffer(false);
-      }
-    },
-    [request_id, token],
-  );
+  function seleccionarOferta(offer: NormalizedFlightOffer) {
+    setSelected(offer);
+    const fd = new FormData();
+    fd.set("intent", "selectFlight");
+    fd.set("offer", JSON.stringify(offer));
+    submit(fd);
+  }
 
-  const seleccionarHotel = useCallback(
-    async (offer: NormalizedHotelOffer) => {
-      setSavingHotel(true);
-      try {
-        let offerToSave = offer;
-        const searchResultId = offer.searchResultId ?? offer.id;
-        if (offer.provider === "duffel_stays" && searchResultId.startsWith("srr_")) {
-          try {
-            const detail = await apiRequest<{ offer: NormalizedHotelOffer }>(
-              `/hotels/search-results/${encodeURIComponent(searchResultId)}/rates`,
-              {
-                method: "POST",
-                data: { base_offer: offer },
-                headers: { Authorization: `Bearer ${token}` },
-              },
-            );
-            if (detail.offer) {
-              offerToSave = detail.offer;
-            }
-          } catch (rateErr) {
-            console.warn("[hotels] fetch_all_rates no disponible, guardando oferta resumida.", rateErr);
-          }
-        }
+  function seleccionarHotel(offer: NormalizedHotelOffer) {
+    const fd = new FormData();
+    fd.set("intent", "selectHotel");
+    fd.set("offer", JSON.stringify(offer));
+    submit(fd);
+  }
 
-        await apiRequest(`/travel-agent/travel-request/${request_id}/selected-hotel`, {
-          method: "PUT",
-          data: { offer: offerToSave },
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        setSelectedHotel(offerToSave);
-        setToast({ message: "Opción de hospedaje guardada en la solicitud.", type: "success" });
-      } catch (e) {
-        console.error(e);
-        showAppAlert("No se pudo guardar la opción de hospedaje.", { variant: "error" });
-      } finally {
-        setSavingHotel(false);
-      }
-    },
-    [request_id, token],
-  );
-
-  const finalizarAtencion = useCallback(async () => {
+  function finalizarAtencion() {
     if (needsPlane && !selected) {
       showAppAlert("Selecciona y guarda una oferta de vuelo antes de finalizar la atención.", {
         variant: "warning",
@@ -277,25 +239,12 @@ export default function AttendRequest({
       });
       return;
     }
-    setSubmitting(true);
-    try {
-      await apiRequest(`/travel-agent/attend-travel-request/${request_id}`, {
-        method: "PUT",
-        data: {},
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      setToast({ message: "Solicitud atendida correctamente.", type: "success" });
-      await new Promise((r) => setTimeout(r, 1500));
-      window.location.href = "/dashboard";
-    } catch (error) {
-      console.error(error);
-      showAppAlert("No se pudo completar la atención de la solicitud.", { variant: "error" });
-    } finally {
-      setSubmitting(false);
-    }
-  }, [request_id, token, selected, selectedHotel, needsPlane, needsHotel]);
+    const fd = new FormData();
+    fd.set("intent", "finalize");
+    submit(fd);
+  }
 
-  function formatTime(iso: string) {
+  function formatTime(iso: string): string {
     try {
       return new Date(iso).toLocaleString("es-MX", {
         dateStyle: "short",
@@ -311,7 +260,7 @@ export default function AttendRequest({
 
   return (
     <div className="w-full max-w-5xl space-y-8 p-6 bg-white rounded border border-gray-200">
-      <h1 className="text-xl font-semibold text-gray-900">Agencia de viajes</h1>
+      <h1 className="text-xl font-semibold text-gray-900">Agencia de viajes — Solicitud #{requestId}</h1>
       <p className="text-sm text-gray-600">{introText}</p>
 
       {needsPlane ? (
@@ -383,11 +332,13 @@ export default function AttendRequest({
           <div className="mt-3 flex justify-end">
             <button
               type="button"
-              onClick={() => void buscarVuelos()}
-              disabled={searching}
+              onClick={buscarVuelos}
+              disabled={submitting}
               className="px-4 py-2 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 disabled:bg-gray-400"
             >
-              {searching ? "Buscando…" : "Buscar vuelos"}
+              {submitting && fetcher.formData?.get("intent") === "searchFlights"
+                ? "Buscando…"
+                : "Buscar vuelos"}
             </button>
           </div>
         </section>
@@ -420,8 +371,8 @@ export default function AttendRequest({
                 <p className="text-xs text-gray-500">Duración: {o.durationLabel}</p>
                 <button
                   type="button"
-                  disabled={savingOffer}
-                  onClick={() => void seleccionarOferta(o)}
+                  disabled={submitting}
+                  onClick={() => seleccionarOferta(o)}
                   className="mt-1 w-full py-2 rounded-md border border-blue-600 text-blue-700 text-sm font-medium hover:bg-blue-50 disabled:opacity-50"
                 >
                   Seleccionar vuelo
@@ -443,8 +394,7 @@ export default function AttendRequest({
         <section className="rounded-lg border border-gray-200 p-4 bg-amber-50/40">
           <h2 className="text-sm font-semibold text-gray-800 mb-3">Buscar hospedaje</h2>
           <p className="text-xs text-gray-600 mb-3">
-            Ciudad o zona del destino (según la solicitud). Las fechas suelen coincidir con el
-            tramo que requiere hotel; ajústalas si la estancia es distinta.
+            Ciudad o zona del destino (según la solicitud). Ajusta las fechas si la estancia es distinta.
           </p>
           <div className="grid grid-cols-1 md:grid-cols-4 gap-3 items-end">
             <div className="md:col-span-2">
@@ -490,11 +440,13 @@ export default function AttendRequest({
           <div className="mt-3 flex justify-end">
             <button
               type="button"
-              onClick={() => void buscarHoteles()}
-              disabled={searchingHotels}
+              onClick={buscarHoteles}
+              disabled={submitting}
               className="px-4 py-2 rounded-md bg-amber-700 text-white text-sm font-medium hover:bg-amber-800 disabled:bg-gray-400"
             >
-              {searchingHotels ? "Buscando…" : "Buscar hospedaje"}
+              {submitting && fetcher.formData?.get("intent") === "searchHotels"
+                ? "Buscando…"
+                : "Buscar hospedaje"}
             </button>
           </div>
         </section>
@@ -527,8 +479,8 @@ export default function AttendRequest({
                 ) : null}
                 <button
                   type="button"
-                  disabled={savingHotel}
-                  onClick={() => void seleccionarHotel(h)}
+                  disabled={submitting}
+                  onClick={() => seleccionarHotel(h)}
                   className="mt-1 w-full py-2 rounded-md border border-amber-800 text-amber-900 text-sm font-medium hover:bg-amber-50 disabled:opacity-50"
                 >
                   Seleccionar hospedaje
@@ -556,7 +508,9 @@ export default function AttendRequest({
           variant="filled"
           disabled={!canFinalize}
         >
-          {submitting ? "Procesando…" : "Finalizar atención"}
+          {submitting && fetcher.formData?.get("intent") === "finalize"
+            ? "Procesando…"
+            : "Finalizar atención"}
         </ModalWrapper>
       </div>
 

@@ -19,11 +19,13 @@
 import { jsonOk, jsonError, jsonFromError } from "~/platform/http/responses";
 import { requireSession } from "~/platform/session/requireUser.server";
 import { assertCsrf } from "~/platform/csrf/csrf.server";
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore — JS module
-import exchangeRateService from "~/contexts/fx/application/exchangeRateService.js";
-// @ts-ignore
-import { convertAmount } from "~/contexts/fx/application/fxPublicService.js";
+import {
+  getExchangeRate,
+  convertCurrency,
+  getSupportedCurrencies,
+  getRateHistory,
+  convertAmount,
+} from "~/contexts/fx";
 
 type DispatchArgs = { request: Request; subpath: string };
 
@@ -43,7 +45,7 @@ export async function dispatchExchangeRateApi({ request, subpath }: DispatchArgs
       if (!CURRENCY_RE.test(source) || !CURRENCY_RE.test(target)) {
         return jsonError(400, "Currency codes must be 3 letters", "INVALID_CURRENCY");
       }
-      const rateData = await exchangeRateService.getExchangeRate(source, target);
+      const rateData = await getExchangeRate(source, target);
       return jsonOk({
         success: true,
         data: rateData,
@@ -63,7 +65,7 @@ export async function dispatchExchangeRateApi({ request, subpath }: DispatchArgs
       if (!CURRENCY_RE.test(source) || !CURRENCY_RE.test(target)) {
         return jsonError(400, "Currency codes must be 3 letters", "INVALID_CURRENCY");
       }
-      const result = await exchangeRateService.convertCurrency(amount, source, target);
+      const result = await convertCurrency(amount, source, target);
       return jsonOk({
         success: true,
         data: result,
@@ -72,7 +74,7 @@ export async function dispatchExchangeRateApi({ request, subpath }: DispatchArgs
     }
 
     if (method === "GET" && path === "currencies") {
-      const currencies = await exchangeRateService.getSupportedCurrencies();
+      const currencies = await getSupportedCurrencies();
       return jsonOk({
         success: true,
         data: currencies,
@@ -91,7 +93,7 @@ export async function dispatchExchangeRateApi({ request, subpath }: DispatchArgs
       if (!ISO_DATE_RE.test(startDate) || !ISO_DATE_RE.test(endDate)) {
         return jsonError(400, "Dates must be YYYY-MM-DD", "INVALID_DATE");
       }
-      const history = await exchangeRateService.getRateHistory(source, target, startDate, endDate);
+      const history = await getRateHistory(source, target, startDate, endDate);
       return jsonOk({
         success: true,
         data: history,

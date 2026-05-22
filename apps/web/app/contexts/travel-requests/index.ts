@@ -1,8 +1,6 @@
 /**
- * @module index
- * @description API pública del slice travel-requests. Otros slices y las
- * routes importan SOLO desde aquí. No profundizan en application/ o
- * infrastructure/.
+ * @module travel-requests (slice public API)
+ * @description Convertido a TS en sesión E — cero `@ts-ignore` aquí.
  */
 
 // ── Domain types ──────────────────────────────────────────────────────────
@@ -15,9 +13,9 @@ export type {
   TravelRequestDetail,
   CreateTravelRequestInput,
   EditTravelRequestInput,
-} from "~/contexts/travel-requests/domain/entities/Request";
+} from "~/contexts/travel-requests/domain/entities/Request.js";
 
-export type { RequestRepository } from "~/contexts/travel-requests/domain/ports/RequestRepository";
+export type { RequestRepository } from "~/contexts/travel-requests/domain/ports/RequestRepository.js";
 export type {
   TravelRequestAdminQueries,
   TravelRequestDetailRow,
@@ -30,10 +28,9 @@ export {
   InvalidStatusTransitionError,
   RequestNotCancellableError,
   DuplicateCfdiError,
-} from "~/contexts/travel-requests/domain/errors";
+} from "~/contexts/travel-requests/domain/errors.js";
 
-// ── Use-cases legacy (pending hexagonal refactor) ─────────────────────────
-// @ts-ignore — JS module
+// ── Use-cases TS (sesión E) ──────────────────────────────────────────────
 export {
   listCompletedRequests,
   listActiveRequests,
@@ -42,16 +39,40 @@ export {
   getCostCenterForUser,
 } from "~/contexts/travel-requests/application/applicantQueryService.js";
 
-// @ts-ignore — JS module (pending hexagonal refactor)
 export {
   formatRoutes,
   getRequestDays,
   cancelTravelRequestValidation,
   createExpenseValidationBatch,
   sendReceiptsForValidation,
+  getCountryId,
+  getCityId,
+  TravelRequestServiceError,
+  type RouteInput,
+  type ReceiptInput,
 } from "~/contexts/travel-requests/application/applicantService.js";
 
-// ── Use-cases hexagonal (DI por composition root) ────────────────────────
+export {
+  buildSolicitudJourney,
+  buildJourneyStepDefinitions,
+  approvalLevelsFromSnapshot,
+  routeNeedsAgency,
+  type StepState,
+  type JourneyStep,
+  type JourneyStepDef,
+  type HistorialEntry,
+  type JourneyOutput,
+} from "~/contexts/travel-requests/application/solicitudJourneyService.js";
+
+export {
+  requestAllowsReceiptUpload,
+  assertRequestAllowsReceiptUpload,
+  ReceiptUploadPolicyError,
+  MIN_STATUS_FOR_RECEIPT_UPLOAD,
+  MAX_STATUS_FOR_RECEIPT_UPLOAD,
+} from "~/contexts/travel-requests/application/requestReceiptUploadPolicy.js";
+
+// ── Hexagonal queries (admin views) ───────────────────────────────────────
 import { PrismaTravelRequestAdminQueries } from "~/contexts/travel-requests/infrastructure/PrismaTravelRequestAdminQueries.js";
 import * as detailModule from "~/contexts/travel-requests/application/getTravelRequestDetail.js";
 

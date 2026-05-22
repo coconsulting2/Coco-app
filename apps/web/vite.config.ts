@@ -2,14 +2,22 @@ import { reactRouter } from "@react-router/dev/vite";
 import { defineConfig } from "vite";
 import tsconfigPaths from "vite-tsconfig-paths";
 import tailwindcss from "@tailwindcss/vite";
-import basicSsl from "@vitejs/plugin-basic-ssl";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-const CERT_DIR = path.resolve(__dirname, "certs");
+// CERT_DIR: probamos primero apps/web/certs/ (dev local), luego /app/certs
+// (volumen montado por docker compose). El entrypoint del container deposita
+// los certs en /app/certs.
+const LOCAL_CERT_DIR = path.resolve(__dirname, "certs");
+const DOCKER_CERT_DIR = "/app/certs";
+const CERT_DIR = fs.existsSync(path.join(LOCAL_CERT_DIR, "server.crt"))
+  ? LOCAL_CERT_DIR
+  : fs.existsSync(path.join(DOCKER_CERT_DIR, "server.crt"))
+    ? DOCKER_CERT_DIR
+    : LOCAL_CERT_DIR;
 const hasCerts =
   fs.existsSync(path.join(CERT_DIR, "server.key")) &&
   fs.existsSync(path.join(CERT_DIR, "server.crt"));
@@ -28,7 +36,10 @@ export default defineConfig({
     tailwindcss(),
     reactRouter(),
     tsconfigPaths(),
-    ...(hasCerts ? [] : [basicSsl()]),
+    // basicSsl() removed — bun no expone `node:crypto.X509Certificate`
+    // del modo que ese plugin requiere. Cuando no hay certs, vite arranca
+    // en http://localhost:5173. En docker el entrypoint genera certs antes
+    // de iniciar `react-router dev`, así que hasCerts === true.
   ],
   resolve: {
     alias: [

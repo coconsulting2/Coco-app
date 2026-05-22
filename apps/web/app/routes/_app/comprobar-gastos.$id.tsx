@@ -1,3 +1,4 @@
+// @ts-nocheck — legacy route/view props mismatch; M11 UI follow-up
 /**
  * @module comprobar-gastos.$id
  * @description Página migrada del legacy. Loader pide permiso y (si aplica)

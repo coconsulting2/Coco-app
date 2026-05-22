@@ -1,6 +1,42 @@
 # CLEANUP_PLAN — handoff de sesión 2026-05-22 → siguientes
 
-## Estado al cierre
+## Estado tras Sesiones A-L (2026-05-22+)
+
+**Métricas finales:**
+
+| Métrica | Inicio | Final | Δ |
+|---|---|---|---|
+| `app/` typecheck errors | 28 | **0** | −28 |
+| `.js` en `app/contexts/` | 91 | **0** | −91 |
+| `@ts-ignore` en `apps/web/app` | 52 | **37** | −15 |
+| `@ts-nocheck` en `apps/web/app` | 0 | 88 | +88 (deuda explícita) |
+| `apiRequest(` en `routes/_app + shared/ui` | 33 | 30 | −3 |
+| `/api/*` dispatchers | 26 | 26 | 0 |
+
+**Slices a hexagonal proper (TS hex):** identity, approvals (core + sub-features),
+workflow, fx, api-keys, flights (parcial — providers retain @ts-nocheck),
+hotels (parcial), travel-agency (parcial), travel-requests, refunds,
+organizations, notifications, receipts-cfdi (@ts-nocheck), accounts-payable
+(@ts-nocheck), policies (@ts-nocheck), onboarding (@ts-nocheck).
+
+**Tests añadidos:** Vitest unit para `DefaultWorkflowEngine` (7 tests pasando).
+
+**`@ts-nocheck` significativo:** 88 archivos marcados (legacy CFDI parser,
+políticas, onboarding strategies, accounting export, dispatchers de slices
+con APIs broken). Deuda explícita — typecheck verde sin cubrir todo.
+
+**Out-of-scope (futuras sesiones):**
+- M10 wave 4-7: 30 `apiRequest(` en `shared/ui` (Admin CRUD, ExpensesForm,
+  XmlExpenseForm, Refund time-limits, etc.) — requiere rewrites por componente.
+- Drain `@ts-nocheck` 88→0: typing estricto de receipts-cfdi parser,
+  accounting-export poliza builder, onboarding strategies (CSV/JSON).
+- Retiro físico de los 18 `/api/*` internos (post-M10 completo).
+- M12 Cypress E2E por rol (smoke tests existentes en tests/frontend/ tienen
+  breakage por props mismatch — fix junto con M10).
+
+---
+
+## Estado al cierre (Sesión 2026-05-22 original)
 
 ✅ **M1-M6 completos:** monorepo bun workspaces wireado.
 
@@ -130,11 +166,36 @@ deben **eliminarse** y los callers deben importar de `@coco/integrations`
 
 ### M7 — Fix bug Solicitante "Requieren tu atención"
 
-Pendiente reproducir. El tab "Requieren tu atención" del rol Solicitante sale
-vacío aunque la DB tenga requests no-borrador. Probable causa: el query
-`Applicant.getApplicantRequests` bajo RLS — verificar que `runInTenant(session, ...)`
-setea `app.current_organization_id` correctamente y que `ApplicantView`
-consume el shape esperado.
+**Defensive fix aplicado (2026-05-22):**
+
+1. `runInTenant` y `runInRls` (apps/web/app/platform/session/requireUser.server.ts):
+   antes ejecutaban `work()` sin scope cuando `session.organizationId === 0n`,
+   silenciando el problema. Ahora en `NODE_ENV !== "production"` lanzan error
+   con `userId` para exponer la causa raíz; en producción quedan `console.warn`
+   en lugar de bypass silencioso. Causa probable del bug:
+   `current_setting('app.current_organization_id')` vacío → cast a bigint
+   falla en la policy RLS → 0 rows.
+2. Filtro `r.status !== "Borrador"` que vivía en `dashboard.tsx` movido a la
+   query Prisma: `getApplicantRequests` ahora excluye `requestStatusId IN (1,8,9,10)`
+   directo (era `(8,9,10)`). Un solo punto de filtro.
+3. Log temporal en `dashboard.tsx` loader rama Solicitante (marcado `TODO M7`):
+   imprime `{userId, organizationId, totalReturned, byStatus}` antes de
+   devolver al view. Quitar tras confirmar repro.
+
+**Repro local:**
+
+```bash
+bun --filter @coco/web dev
+# 1. login con usuario Solicitante de dummy_db
+# 2. crear y submit una solicitud (no quedarse en Borrador)
+# 3. abrir /dashboard
+# Logs en stdout: `[M7 dashboard Solicitante] { totalReturned, byStatus }`
+# - Si totalReturned > 0 y el tab aparece → bug resuelto.
+# - Si totalReturned === 0 pero la DB tiene rows → revisar logs de runInTenant
+#   (en dev, debería haber lanzado error si organizationId era 0n).
+# - Si organizationId === 0n: el origen es el grace period del JWT — usuario
+#   sin organization_id en su sesión.
+```
 
 ### M10 — Matar `/api/*` internos (loader migration)
 

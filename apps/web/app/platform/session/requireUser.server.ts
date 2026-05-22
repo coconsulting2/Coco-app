@@ -176,7 +176,16 @@ export async function runInTenant<T>(
   work: () => Promise<T>,
 ): Promise<T> {
   if (session.organizationId === 0n) {
-    // Sin tenant resuelto: ejecutamos sin scope (mock dev o grace period).
+    // Sin tenant resuelto: mock dev sin orgId o token legacy en grace period.
+    // En no-prod fallamos ruidosamente porque cualquier query bajo RLS policy
+    // activa va a devolver cero rows silenciosamente (current_setting('') ->
+    // cast a bigint falla y la policy no matchea). Era la causa probable del
+    // bug del Solicitante M7.
+    const msg = `runInTenant ejecutado sin organizationId (userId=${session.user.user_id}). Las queries RLS van a devolver vacío silenciosamente.`;
+    if (process.env.NODE_ENV !== "production") {
+      throw new Error(`[runInTenant] ${msg}`);
+    }
+    console.warn(`[runInTenant] ${msg}`);
     return work();
   }
   return withTenantContext(
@@ -207,6 +216,11 @@ export async function runInRls<T>(
   work: (tx: RlsTransaction | null) => Promise<T>,
 ): Promise<T> {
   if (session.organizationId === 0n) {
+    const msg = `runInRls ejecutado sin organizationId (userId=${session.user.user_id}). Las mutaciones bajo RLS policy van a fallar silenciosamente.`;
+    if (process.env.NODE_ENV !== "production") {
+      throw new Error(`[runInRls] ${msg}`);
+    }
+    console.warn(`[runInRls] ${msg}`);
     return work(null);
   }
   return withTenantContext(

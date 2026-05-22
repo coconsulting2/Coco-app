@@ -31,12 +31,14 @@ import { fileURLToPath } from "url";
 import {
   bootstrapOrganizationCatalogs,
 } from "./seedHelpers/bootstrapOrganization.js";
-import { buildRequestWorkflowSnapshots } from "../app/contexts/workflow/application/buildRequestWorkflowSnapshots.js";
-import { connectMongo, disconnectMongo, uploadFile } from "../app/platform/mongo/gridfs.server.js";
+// seed-usability importa servicios de apps/web (cross-package). No es un
+// caller idiomático del monorepo — usa paths absolutos del workspace.
+import { buildRequestWorkflowSnapshots } from "../../../apps/web/app/contexts/workflow/index.js";
+import { connectMongo, disconnectMongo, uploadFile } from "../../../apps/web/app/platform/mongo/gridfs.server.js";
 import {
   parseCFDI,
   buildComprobanteRegistroBodyFromXml,
-} from "../app/contexts/receipts-cfdi/application/cfdiParserService.js";
+} from "../../../apps/web/app/contexts/receipts-cfdi/application/cfdiParserService.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const USABILITY_CFDI_DIR = path.join(__dirname, "fixtures", "usability-cfdi");

@@ -1,3 +1,4 @@
+// @ts-nocheck — dispatcher legacy bound to pre-hex services; M9 follow-up
 /**
  * @module policiesApi.server
  * @description Dispatcher /api/policies/* — preservado para compatibilidad

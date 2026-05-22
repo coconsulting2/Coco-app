@@ -7,10 +7,10 @@
 import {
   TENANT_APPLICANT_CAPABILITY_CODES,
   shouldMergeTenantApplicantCapability,
-} from "~/shared/config/tenantApplicantCapability.js";
+} from "@coco/shared-config/tenantApplicantCapability";
 import { getTenantContext } from "../db/tenant-context.server.js";
 import prisma from "../db/prisma.server.js";
-import { ensureApplicantGroupsForRole } from "~/prisma/seedHelpers/applicantRoleGroups.js";
+import { ensureApplicantGroupsForRole } from "@coco/db";
 import * as permissionModel from "~/contexts/identity/infrastructure/permissionModel.js";
 
 const ADMIN_MANAGE_ROLE_CODE = "role:manage_permissions";

@@ -44,7 +44,7 @@ export {
 import { PrismaApprovalInboxQueries } from "~/contexts/approvals/infrastructure/PrismaApprovalInboxQueries.js";
 import { PrismaAuthorizerRepository } from "~/contexts/approvals/infrastructure/PrismaAuthorizerRepository.js";
 import {
-  LegacyWorkflowRulesAdapter,
+  WorkflowRulesAdapter,
   LegacyPolicyExceptionAdapter,
   LegacyAnticipoPolizaAdapter,
   LegacyEmployeeHierarchyAdapter,
@@ -57,7 +57,7 @@ import * as reassignModule from "~/contexts/approvals/application/reassignApprov
 
 const defaultInboxQueries = new PrismaApprovalInboxQueries();
 const defaultAuthorizerRepo = new PrismaAuthorizerRepository();
-const defaultWorkflowRules = new LegacyWorkflowRulesAdapter();
+const defaultWorkflowRules = new WorkflowRulesAdapter();
 const defaultPolicyExceptions = new LegacyPolicyExceptionAdapter();
 const defaultAnticipoPoliza = new LegacyAnticipoPolizaAdapter();
 const defaultEmployeeHierarchy = new LegacyEmployeeHierarchyAdapter();
@@ -99,13 +99,22 @@ export const decideException = (
   note: string | null,
 ) => defaultPolicyExceptions.decideException(exceptionId, decision, userId, note);
 
-// ── Legacy aún pendiente hexagonal (approverResolver + substitute) ────────
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore — JS module (pending hexagonal refactor — ver CLEANUP_PLAN.md)
+// ── Sub-features convertidas a TS en sesión E ──────────────────────────
 export { resolveN1N2Approvers } from "~/contexts/approvals/application/approverResolver.js";
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore — JS module (pending hexagonal refactor)
-export { upsertSubstitute, listSubstitutes, removeSubstitute } from "~/contexts/approvals/application/approvalSubstituteService.js";
+export {
+  upsertSubstitute,
+  listSubstitutes,
+  removeSubstitute,
+  createSubstitute,
+  deleteSubstitute,
+  processStaleApprovals,
+  ApprovalSubstituteError,
+} from "~/contexts/approvals/application/approvalSubstituteService.js";
+export {
+  findAlertMessageIdForRequestStatus,
+  REQUEST_STATUS_ALERT_TEXT,
+} from "~/contexts/approvals/application/alertMessageResolver.js";
+export { createRequestInsertAlert } from "~/contexts/approvals/application/createRequestInsertAlert.js";
 
 // ── Raw use-cases (para tests + composiciones custom) ────────────────────
 export const usecases = {
@@ -118,7 +127,7 @@ export const usecases = {
 export const adapters = {
   ApprovalInboxQueries: PrismaApprovalInboxQueries,
   AuthorizerRepository: PrismaAuthorizerRepository,
-  WorkflowRulesPort: LegacyWorkflowRulesAdapter,
+  WorkflowRulesPort: WorkflowRulesAdapter,
   PolicyExceptionPort: LegacyPolicyExceptionAdapter,
   AnticipoPolizaPort: LegacyAnticipoPolizaAdapter,
   EmployeeHierarchyPort: LegacyEmployeeHierarchyAdapter,

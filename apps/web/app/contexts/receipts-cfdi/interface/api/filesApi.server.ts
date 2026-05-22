@@ -6,7 +6,7 @@
  * con componentes legacy y contrato OpenAPI.
  */
 import { jsonOk, jsonError, jsonFromError } from "~/platform/http/responses";
-import { requireSession, runInTenant } from "~/platform/session/requireUser.server";
+import { requireSession, requirePermissions, runInTenant } from "~/platform/session/requireUser.server";
 import { assertCsrf } from "~/platform/csrf/csrf.server";
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment

@@ -25,7 +25,9 @@
     "typecheck": "tsc -b"
   },
   "dependencies": {
-    "@prisma/client": "^6.16.0"
+    "@coco/shared-config": "workspace:*",
+    "@prisma/client": "^6.16.0",
+    "bcrypt": "^5.1.1"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

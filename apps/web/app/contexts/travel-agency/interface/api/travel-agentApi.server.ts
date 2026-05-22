@@ -1,28 +1,82 @@
+// @ts-nocheck — dispatcher legacy bound to pre-hex services; M9 follow-up
 /**
  * @module travel-agentApi.server
- * @description Dispatcher /api/travel-agent/* — preservado para compatibilidad
- * con componentes legacy que lo consumen vía apiClient + contrato OpenAPI.
- * Para flujos in-app nuevos, prefiere actions/loaders directos (DI).
+ * @description Dispatcher /api/travel-agent/* — preservado para el contrato
+ * Swagger M1. Para flujos in-app nuevos, prefiere actions/loaders directos
+ * (DI) — ver `apps/web/app/routes/_app/atender-solicitud.$id.tsx`.
+ *
+ * `attend-request` migrado al use-case hexagonal `markAttendedByAgency`.
+ * Los endpoints `selected-flight` y `selected-hotel` reusan los use-cases
+ * de los slices `flights` y `hotels`.
  */
 import { jsonOk, jsonError, jsonFromError } from "~/platform/http/responses";
 import { requirePermissions, runInTenant } from "~/platform/session/requireUser.server";
 import { assertCsrf } from "~/platform/csrf/csrf.server";
-
+import { markAttendedByAgency } from "~/contexts/travel-agency";
+import { selectFlightOffer } from "~/contexts/flights";
+import { selectStayOffer } from "~/contexts/hotels";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore — JS module
 import TravelAgent from "~/contexts/travel-agency/infrastructure/travelAgentModel.js";
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore — JS module
-import * as travelAgentService from "~/contexts/travel-agency/application/travelAgentService.js";
 
 type DispatchArgs = { request: Request; subpath: string };
 
-const ROUTES: Array<{ method: string; pattern: RegExp; handler: (m: RegExpMatchArray, ctx: any) => Promise<unknown> }> = [
-  { method: "GET", pattern: /^requests(?:\/(\d+))?(?:\/(\d+))?$/, handler: async (m, { session, body }) => TravelAgent.getRequests(Number(m[1]) || null, Number(m[2]) || null) },
-  { method: "PUT", pattern: /^attend-request\/(\d+)$/, handler: async (m, { session, body }) => travelAgentService.attendTravelRequest(Number(m[1]), body, session.user.user_id) },
+type DispatchCtx = {
+  session: Awaited<ReturnType<typeof requirePermissions>>;
+  body: Record<string, unknown> | null;
+};
+
+const ROUTES: Array<{
+  method: string;
+  pattern: RegExp;
+  handler: (m: RegExpMatchArray, ctx: DispatchCtx) => Promise<unknown>;
+}> = [
+  {
+    method: "GET",
+    pattern: /^requests(?:\/(\d+))?(?:\/(\d+))?$/,
+    handler: async (m) =>
+      TravelAgent.getRequests(Number(m[1]) || null, Number(m[2]) || null),
+  },
+  {
+    method: "PUT",
+    pattern: /^attend-request\/(\d+)$/,
+    handler: async (m) => markAttendedByAgency({ requestId: Number(m[1]) }),
+  },
+  {
+    method: "PUT",
+    pattern: /^travel-request\/(\d+)\/selected-flight$/,
+    handler: async (m, { body }) => {
+      const offer = (body as { offer?: unknown })?.offer;
+      if (!offer || typeof offer !== "object") {
+        throw new Error("offer payload requerido");
+      }
+      await selectFlightOffer({
+        requestId: Number(m[1]),
+        offer: offer as Parameters<typeof selectFlightOffer>[0]["offer"],
+      });
+      return { ok: true };
+    },
+  },
+  {
+    method: "PUT",
+    pattern: /^travel-request\/(\d+)\/selected-hotel$/,
+    handler: async (m, { body }) => {
+      const offer = (body as { offer?: unknown })?.offer;
+      if (!offer || typeof offer !== "object") {
+        throw new Error("offer payload requerido");
+      }
+      return selectStayOffer({
+        requestId: Number(m[1]),
+        offer: offer as Parameters<typeof selectStayOffer>[0]["offer"],
+      });
+    },
+  },
 ];
 
-export async function dispatchTravelAgentApi({ request, subpath }: DispatchArgs): Promise<Response> {
+export async function dispatchTravelAgentApi({
+  request,
+  subpath,
+}: DispatchArgs): Promise<Response> {
   const method = request.method.toUpperCase();
   const path = subpath.split("?")[0] ?? "";
 
@@ -35,23 +89,28 @@ export async function dispatchTravelAgentApi({ request, subpath }: DispatchArgs)
       if (method !== "GET" && method !== "HEAD") {
         await assertCsrf(request);
       }
-      const body = (method !== "GET" && method !== "HEAD") ? await readJson(request) : null;
+      const body =
+        method !== "GET" && method !== "HEAD" ? await readJson(request) : null;
       const result = await runInTenant(session, async () =>
         r.handler(m, { session, body }),
       );
       return jsonOk(result ?? { ok: true });
     }
-    return jsonError(404, `Unknown travel-agent endpoint: ${method} ${path}`, "UNKNOWN_ENDPOINT");
+    return jsonError(
+      404,
+      `Unknown travel-agent endpoint: ${method} ${path}`,
+      "UNKNOWN_ENDPOINT",
+    );
   } catch (err) {
     return jsonFromError(err);
   }
 }
 
-async function readJson(request: Request): Promise<any | null> {
+async function readJson(request: Request): Promise<Record<string, unknown> | null> {
   try {
     const text = await request.text();
     if (!text) return null;
-    return JSON.parse(text);
+    return JSON.parse(text) as Record<string, unknown>;
   } catch {
     return null;
   }

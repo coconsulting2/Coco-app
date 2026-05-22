@@ -25,3 +25,8 @@ certs/openssl.cnf
 
 # Docker volumes / sentinels
 *.seeded
+
+# Local handoff notes (no van al repo)
+CLAUDE.md
+NEXT_SESSION_PROMPT.md
+bun.lockb

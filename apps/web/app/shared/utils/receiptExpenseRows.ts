@@ -1,10 +1,13 @@
 /**
  * Normaliza filas de GET /accounts-payable/get-expense-validations/:id
  * y metadatos de /files/receipt-files/:id para ReceiptDetailCard.
+ *
+ * @deprecated Este helper se cargaba desde un Astro .astro legacy
+ * (`RequestExpensesValidationSection.astro`) que ya no se renderiza bajo
+ * RR7. Permanece compilando para conservar tipos `ReceiptDisplayRow` que
+ * otros componentes podrían reutilizar.
  */
 import type { ReceiptCfdi, ReceiptFile } from "@components/ReceiptDetailCard";
-import { apiRequest } from "~/shared/utils/apiClient";
-import type { AstroCookies } from "astro";
 
 export interface ExpenseValidationApiRow {
   receipt_id: number;
@@ -54,35 +57,25 @@ function asReceiptCfdi(value: unknown): ReceiptCfdi | null {
   };
 }
 
-export async function enrichExpensesWithFiles(
-  expenses: ExpenseValidationApiRow[],
-  cookies: AstroCookies,
-): Promise<ReceiptDisplayRow[]> {
-  if (!expenses.length) return [];
-
-  const enriched = await Promise.all(
-    expenses.map(async (receipt) => {
-      let fileMap: Record<string, unknown> | null = null;
-      try {
-        fileMap = await apiRequest(`/files/receipt-files/${receipt.receipt_id}`, {
-          cookies,
-        });
-      } catch {
-        fileMap = null;
-      }
-      return { receipt, fileMap };
-    }),
-  );
-
-  return enriched.map(({ receipt, fileMap }) => ({
-    receipt_id: Number(receipt.receipt_id),
-    receipt_type_name: String(receipt.receipt_type_name ?? ""),
-    amount: Number(receipt.amount),
-    validation: String(receipt.validation ?? ""),
-    expense_status: String(receipt.expense_status ?? ""),
-    cfdi: asReceiptCfdi(receipt.cfdi),
+/**
+ * Mapea filas de expense validation a la forma denormalizada que consume
+ * el componente `ReceiptDetailCard`. Recibe el `fileMap` ya resuelto
+ * (antes lo cargaba un `apiRequest` con cookies Astro — ahora debe venir
+ * del loader del route padre).
+ */
+export function mapExpenseValidationRow(
+  expense: ExpenseValidationApiRow,
+  fileMap: Record<string, unknown> | null,
+): ReceiptDisplayRow {
+  return {
+    receipt_id: Number(expense.receipt_id),
+    receipt_type_name: String(expense.receipt_type_name ?? ""),
+    amount: Number(expense.amount),
+    validation: String(expense.validation ?? ""),
+    expense_status: String(expense.expense_status ?? ""),
+    cfdi: asReceiptCfdi(expense.cfdi),
     pdf: asReceiptFile(fileMap?.pdf),
     xml: asReceiptFile(fileMap?.xml),
     receipt_image: asReceiptFile(fileMap?.receipt_image),
-  }));
+  };
 }

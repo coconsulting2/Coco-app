@@ -6,12 +6,7 @@
  * convertidos a hexagonal proper, estos adapters se reemplazan importando
  * directo del slice public API.
  */
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore — legacy JS (workflow slice pending hexagonal refactor)
-import {
-  statusAfterN1Approval as legacyStatusAfterN1Approval,
-  statusAfterN2Approval as legacyStatusAfterN2Approval,
-} from "~/contexts/workflow/application/workflowRulesEngine.js";
+import { statusAfterN1Approval, statusAfterN2Approval } from "~/contexts/workflow";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore — legacy JS (policies slice pending)
 import * as legacyPolicyExceptionService from "~/contexts/policies/application/policyExceptionService.js";
@@ -30,12 +25,17 @@ import type {
 import type { AnticipoPolizaPort } from "~/contexts/approvals/domain/ports/AnticipoPolizaPort.js";
 import type { EmployeeHierarchyPort } from "~/contexts/approvals/domain/ports/EmployeeHierarchyPort.js";
 
-export class LegacyWorkflowRulesAdapter implements WorkflowRulesPort {
+/**
+ * Adapter del puerto WorkflowRulesPort que delega al slice workflow
+ * (ya hexagonal). Reemplazó al legacy `LegacyWorkflowRulesAdapter` cuando el
+ * slice workflow se convirtió en hexagonal proper.
+ */
+export class WorkflowRulesAdapter implements WorkflowRulesPort {
   statusAfterN1Approval(levels: number[]): number {
-    return Number(legacyStatusAfterN1Approval(levels));
+    return statusAfterN1Approval(levels);
   }
   statusAfterN2Approval(): number {
-    return Number(legacyStatusAfterN2Approval());
+    return statusAfterN2Approval();
   }
 }
 

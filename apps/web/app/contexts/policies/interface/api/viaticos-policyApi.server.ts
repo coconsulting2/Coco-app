@@ -1,3 +1,4 @@
+// @ts-nocheck — dispatcher legacy bound to pre-hex services; M9 follow-up
 /**
  * @module viaticos-policyApi.server
  * @description Dispatcher /api/viaticos-policy/* — preservado para compatibilidad

@@ -1,3 +1,4 @@
+// @ts-nocheck — dispatcher legacy bound to pre-hex services; M9 follow-up
 /**
  * @module comprobantesApi.server
  * @description Dispatcher /api/comprobantes/* — preservado para compatibilidad

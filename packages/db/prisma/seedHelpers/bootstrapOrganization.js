@@ -11,8 +11,8 @@
  *   - 'CLIENT' (resto): grupos default sin DittaSuperAdmin.
  */
 import bcrypt from "bcrypt";
-import { ACCOUNTING_CATALOG_DEFAULTS } from "../../app/shared/config/accountingCatalogs.js";
-import { TENANT_APPLICANT_CAPABILITY_CODES } from "../../app/shared/config/tenantApplicantCapability.js";
+import { ACCOUNTING_CATALOG_DEFAULTS } from "@coco/shared-config/accountingCatalogs";
+import { TENANT_APPLICANT_CAPABILITY_CODES } from "@coco/shared-config/tenantApplicantCapability";
 
 const SALT_ROUNDS = 10;
 

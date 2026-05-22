@@ -12,8 +12,6 @@ import { requireSession, runInTenant } from "~/platform/session/requireUser.serv
 import { getUserProfile } from "~/contexts/identity";
 import { getApprovalInbox } from "~/contexts/approvals";
 import { listTravelRequestsByDeptStatus } from "~/contexts/travel-requests";
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore — JS module (travel-requests slice pending hexagonal refactor — ver CLEANUP_PLAN.md)
 import Applicant from "~/contexts/travel-requests/infrastructure/applicantModel.js";
 
 import ApplicantView from "~/contexts/travel-requests/interface/views/ApplicantView";
@@ -71,11 +69,21 @@ export async function loader({ request }: LoaderFunctionArgs) {
     const all = (await runInTenant(session, async () =>
       Applicant.getApplicantRequests(session.user.user_id),
     )) as LegacyApplicantRequest[] | null;
-    const activeRequests = (all ?? []).filter((r) => r.status !== "Borrador");
+    const byStatus = (all ?? []).reduce<Record<string, number>>((acc, r) => {
+      acc[r.status] = (acc[r.status] ?? 0) + 1;
+      return acc;
+    }, {});
+    // TODO M7: remover este log cuando el bug del Solicitante esté confirmado.
+    console.log("[M7 dashboard Solicitante]", {
+      userId: session.user.user_id,
+      organizationId: String(session.organizationId),
+      totalReturned: all?.length ?? 0,
+      byStatus,
+    });
     return {
       kind: "applicant" as const,
       userName,
-      requests: activeRequests,
+      requests: all ?? [],
     };
   }
 

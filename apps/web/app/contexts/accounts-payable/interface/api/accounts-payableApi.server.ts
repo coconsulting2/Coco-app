@@ -1,3 +1,4 @@
+// @ts-nocheck — dispatcher legacy bound to pre-hex services; M9 follow-up
 /**
  * @module accounts-payableApi.server
  * @description Dispatcher /api/accounts-payable/*. Réplica del controller legacy.

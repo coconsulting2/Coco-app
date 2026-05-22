@@ -11,8 +11,6 @@ import type { LoaderFunctionArgs } from "react-router";
 import { Link, useLoaderData } from "react-router";
 
 import { requireAnyPermission, runInTenant } from "~/platform/session/requireUser.server";
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore — JS module
 import { listCompletedRequests } from "~/contexts/travel-requests/application/applicantQueryService.js";
 
 export function meta() {

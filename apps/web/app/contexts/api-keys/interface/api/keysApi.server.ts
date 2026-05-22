@@ -1,29 +1,76 @@
 /**
  * @module keysApi.server
- * @description Dispatcher /api/keys/* — preservado para compatibilidad
- * con componentes legacy que lo consumen vía apiClient + contrato OpenAPI.
- * Para flujos in-app nuevos, prefiere actions/loaders directos (DI).
+ * @description Dispatcher /api/keys/* — preservado para contrato OpenAPI.
+ * Para flujos in-app, importa use-cases directo del slice `@/contexts/api-keys`.
  */
 import { jsonOk, jsonError, jsonFromError } from "~/platform/http/responses";
 import { requirePermissions, runInTenant } from "~/platform/session/requireUser.server";
 import { assertCsrf } from "~/platform/csrf/csrf.server";
-
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore — JS module
-import * as apiKeyService from "~/contexts/api-keys/application/apiKeyService.js";
+import {
+  issueApiKey,
+  revokeApiKey,
+  listApiKeysForOrg,
+  listAuditLogs,
+} from "~/contexts/api-keys";
 
 type DispatchArgs = { request: Request; subpath: string };
 
-const ROUTES: Array<{ method: string; pattern: RegExp; handler: (m: RegExpMatchArray, ctx: any) => Promise<unknown> }> = [
-  { method: "GET", pattern: /^$/, handler: async (m, { session, body }) => apiKeyService.listApiKeys() },
-  { method: "POST", pattern: /^$/, handler: async (m, { session, body }) => apiKeyService.createApiKey(body) },
-  { method: "POST", pattern: /^rotate\/(\d+)$/, handler: async (m, { session, body }) => apiKeyService.rotateApiKey(Number(m[1])) },
-  { method: "POST", pattern: /^validate$/, handler: async (m, { session, body }) => apiKeyService.validateApiKey(body) },
+type DispatchCtx = {
+  session: Awaited<ReturnType<typeof requirePermissions>>;
+  body: Record<string, unknown> | null;
+  url: URL;
+};
+
+const ROUTES: Array<{
+  method: string;
+  pattern: RegExp;
+  handler: (m: RegExpMatchArray, ctx: DispatchCtx) => Promise<unknown>;
+}> = [
+  {
+    method: "GET",
+    pattern: /^$/,
+    handler: async (_m, { session }) => listApiKeysForOrg(session.organizationId),
+  },
+  {
+    method: "POST",
+    pattern: /^$/,
+    handler: async (_m, { session, body }) => {
+      const scope = (body as { scope?: unknown })?.scope;
+      const expiresAt = (body as { expires_at?: string | Date })?.expires_at;
+      if (!expiresAt) {
+        throw new Error("expires_at requerido");
+      }
+      return issueApiKey({
+        orgId: session.organizationId,
+        scope,
+        expiresAt,
+        createdBy: session.user.user_id,
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: /^(\d+)\/revoke$/,
+    handler: async (m) => revokeApiKey(Number(m[1])),
+  },
+  {
+    method: "GET",
+    pattern: /^(\d+)\/logs$/,
+    handler: async (m, { url }) =>
+      listAuditLogs(Number(m[1]), {
+        limit: url.searchParams.get("limit") ?? undefined,
+        cursor: url.searchParams.get("cursor") ?? undefined,
+      }),
+  },
 ];
 
-export async function dispatchKeysApi({ request, subpath }: DispatchArgs): Promise<Response> {
+export async function dispatchKeysApi({
+  request,
+  subpath,
+}: DispatchArgs): Promise<Response> {
   const method = request.method.toUpperCase();
   const path = subpath.split("?")[0] ?? "";
+  const url = new URL(request.url);
 
   try {
     const session = await requirePermissions(request, "api_key:manage");
@@ -34,9 +81,10 @@ export async function dispatchKeysApi({ request, subpath }: DispatchArgs): Promi
       if (method !== "GET" && method !== "HEAD") {
         await assertCsrf(request);
       }
-      const body = (method !== "GET" && method !== "HEAD") ? await readJson(request) : null;
+      const body =
+        method !== "GET" && method !== "HEAD" ? await readJson(request) : null;
       const result = await runInTenant(session, async () =>
-        r.handler(m, { session, body }),
+        r.handler(m, { session, body, url }),
       );
       return jsonOk(result ?? { ok: true });
     }
@@ -46,11 +94,11 @@ export async function dispatchKeysApi({ request, subpath }: DispatchArgs): Promi
   }
 }
 
-async function readJson(request: Request): Promise<any | null> {
+async function readJson(request: Request): Promise<Record<string, unknown> | null> {
   try {
     const text = await request.text();
     if (!text) return null;
-    return JSON.parse(text);
+    return JSON.parse(text) as Record<string, unknown>;
   } catch {
     return null;
   }

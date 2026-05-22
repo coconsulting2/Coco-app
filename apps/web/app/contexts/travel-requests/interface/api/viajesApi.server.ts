@@ -19,7 +19,7 @@ type DispatchArgs = { request: Request; subpath: string };
 
 const ROUTES: Array<{ method: string; pattern: RegExp; handler: (m: RegExpMatchArray, ctx: any) => Promise<unknown> }> = [
   { method: "GET", pattern: /^(\d+)$/, handler: async (m, { session, body }) => Applicant.getApplicantRequest(Number(m[1])) },
-  { method: "POST", pattern: /^(\d+)\/tramos\/(\d+)\/gastos$/, handler: async (m, { session, body }) => GastoTramo.createGasto(Number(m[1]), Number(m[2]), body) },
+  { method: "POST", pattern: /^(\d+)\/tramos\/(\d+)\/gastos$/, handler: async (m, { body }) => GastoTramo.createGastoTramo(Number(m[1]), Number(m[2]), Number(body?.receipt_id)) },
 ];
 
 export async function dispatchViajesApi({ request, subpath }: DispatchArgs): Promise<Response> {

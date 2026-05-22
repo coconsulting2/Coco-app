@@ -68,7 +68,7 @@ export async function dispatchApplicantApi({ request, subpath }: DispatchArgs): 
       const result = await runInTenant(session, async () =>
         Applicant.createTravelRequest(userId, body),
       );
-      return jsonOk({ message: "Travel request created", ...(result ?? {}) });
+      return jsonOk({ ...(result as Record<string, unknown> ?? {}), message: "Travel request created" });
     }
 
     // ── PUT /edit-travel-request/:user_id ─────────────────────────────────
@@ -82,9 +82,10 @@ export async function dispatchApplicantApi({ request, subpath }: DispatchArgs): 
         return jsonError(400, "request_id requerido en body", "INVALID_BODY");
       }
       const result = await runInTenant(session, async () =>
-        Applicant.editTravelRequest(requestId, body, userId),
+        Applicant.editTravelRequest(requestId, body),
       );
-      return jsonOk({ message: "Travel request updated", ...(result ?? {}) });
+      void userId;
+      return jsonOk({ ...(result as Record<string, unknown> ?? {}), message: "Travel request updated" });
     }
 
     // ── PUT /cancel-travel-request/:request_id ────────────────────────────
@@ -108,8 +109,9 @@ export async function dispatchApplicantApi({ request, subpath }: DispatchArgs): 
       const receipts = Array.isArray(body?.receipts) ? body.receipts : [];
       const requestId = Number(body?.request_id);
       const result = await runInTenant(session, async () =>
-        applicantService.createExpenseValidationBatch(receipts, { requestId, userId: session.user.user_id }),
+        applicantService.createExpenseValidationBatch(receipts),
       );
+      void requestId;
       return jsonOk(result);
     }
 
@@ -147,7 +149,7 @@ export async function dispatchApplicantApi({ request, subpath }: DispatchArgs): 
       const result = await runInTenant(session, async () =>
         Applicant.createDraftTravelRequest(userId, body),
       );
-      return jsonOk({ message: "Draft saved", ...(result ?? {}) });
+      return jsonOk({ ...(result as Record<string, unknown> ?? {}), message: "Draft saved" });
     }
 
     // ── PUT /confirm-draft-travel-request/:user_id/:request_id ────────────
@@ -163,7 +165,7 @@ export async function dispatchApplicantApi({ request, subpath }: DispatchArgs): 
       const result = await runInTenant(session, async () =>
         Applicant.confirmDraftTravelRequest(userId, requestId),
       );
-      return jsonOk({ message: "Draft confirmed", ...(result ?? {}) });
+      return jsonOk({ ...(result as Record<string, unknown> ?? {}), message: "Draft confirmed" });
     }
 
     // ── PUT /send-expense-validation/:request_id ──────────────────────────

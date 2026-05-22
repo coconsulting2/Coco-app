@@ -1,4 +1,4 @@
-import approvalSubstituteService from "./approvalSubstituteService.js";
+import approvalSubstituteService from "~/contexts/approvals/application/approvalSubstituteService.js";
 
 let cronTask = null;
 

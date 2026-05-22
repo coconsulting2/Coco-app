@@ -8,70 +8,19 @@
  * Esta es deuda técnica explícita — cada slice convertido a hexagonal proper
  * (ej. `identity/`) elimina su entry aquí.
  *
- * Próximo en conversión: travel-requests, approvals, accounts-payable,
- * receipts-cfdi, policies, refunds, workflow, notifications, onboarding,
- * organizations, api-keys, fx, flights, hotels, travel-agency.
+ * Próximo en conversión: travel-requests, approvals sub-features,
+ * accounts-payable, receipts-cfdi, policies, refunds, notifications,
+ * onboarding, organizations, flights, hotels, travel-agency.
+ * (workflow, fx, api-keys ya migrados 2026-05-22+)
  */
 
-// ── travel-requests ───────────────────────────────────────────────────────
-declare module "~/contexts/travel-requests/application/applicantQueryService.js" {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  export const listCompletedRequests: any;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  export const listActiveRequests: any;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  export const listDrafts: any;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  export const getRequestDetail: any;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  export const getCostCenterForUser: any;
-}
-
-declare module "~/contexts/travel-requests/application/applicantService.js" {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  export const formatRoutes: any;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  export const getRequestDays: any;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  export const cancelTravelRequestValidation: any;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  export const createExpenseValidationBatch: any;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  export const sendReceiptsForValidation: any;
-}
-
-declare module "~/contexts/travel-requests/infrastructure/applicantModel.js" {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const Applicant: any;
-  export default Applicant;
-}
-
-// ── approvals (legacy .js aún pendiente — substitute + resolver) ─────────
-
-declare module "~/contexts/approvals/application/approverResolver.js" {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  export const resolveN1N2Approvers: any;
-}
-
-declare module "~/contexts/approvals/application/approvalSubstituteService.js" {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  export const upsertSubstitute: any;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  export const listSubstitutes: any;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  export const removeSubstitute: any;
-}
-
-declare module "~/contexts/approvals/application/alertMessageResolver.js" {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  export const findAlertMessageIdForRequestStatus: any;
-}
-
 // ── cross-slice services legacy referenciados por approvals adapters ────
-declare module "~/contexts/workflow/application/workflowRulesEngine.js";
+// (workflow, approvals sub-features ya migrados 2026-05-22+)
 declare module "~/contexts/policies/application/policyExceptionService.js";
 declare module "~/contexts/accounts-payable/application/anticipoPolizaLifecycleService.js";
 declare module "~/contexts/onboarding/application/employeeHierarchyService.js";
+
+// (receipts-cfdi ya migrado a TS 2026-05-22+; cfdi files con @ts-nocheck local)
 
 // ── platform helpers (.js leftover) ───────────────────────────────────────
 // Declarado vacío (TS lo trata con `any` implícito en accesos a propiedades)
@@ -94,3 +43,8 @@ declare module "~/platform/mongo/gridfs.server.js" {
 
 declare module "~/platform/scheduler/index.js";
 declare module "~/platform/scheduler/approval-substitute-cron.server.js";
+
+declare module "~/platform/logger/log/logger.js" {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  export const Logger: (name: string) => any;
+}

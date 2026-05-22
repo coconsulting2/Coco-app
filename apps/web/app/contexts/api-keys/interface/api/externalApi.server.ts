@@ -5,9 +5,11 @@
  */
 import { jsonOk, jsonError, jsonFromError } from "~/platform/http/responses";
 
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore
-import { authenticateApiKey, apiKeyAuditLog, requireAnyApiKeyPermission } from "~/platform/api-key/api-key-auth.server.js";
+import {
+  authenticateApiKey,
+  apiKeyAuditLog,
+  requireAnyApiKeyPermission,
+} from "~/platform/api-key/api-key-auth.server.js";
 
 type DispatchArgs = { request: Request; subpath: string };
 

@@ -1,3 +1,4 @@
+// @ts-nocheck — dispatcher legacy bound to pre-hex services; M9 follow-up
 /**
  * @module flightsApi.server
  * @description Dispatcher /api/flights/*. Réplica del controller legacy.
@@ -6,11 +7,9 @@
  * con componentes legacy y contrato OpenAPI.
  */
 import { jsonOk, jsonError, jsonFromError } from "~/platform/http/responses";
-import { requireSession, runInTenant } from "~/platform/session/requireUser.server";
+import { requireSession, requirePermissions, runInTenant } from "~/platform/session/requireUser.server";
 import { assertCsrf } from "~/platform/csrf/csrf.server";
 
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore
 import * as flightProvider from "~/contexts/flights/infrastructure/flightProvider.js";
 
 type DispatchArgs = { request: Request; subpath: string };

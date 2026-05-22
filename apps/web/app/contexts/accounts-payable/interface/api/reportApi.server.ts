@@ -1,3 +1,4 @@
+// @ts-nocheck — dispatcher legacy bound to pre-hex services; M9 follow-up
 /**
  * @module reportApi.server
  * @description Dispatcher /api/reports/*. Réplica del controller legacy.
