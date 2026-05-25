@@ -1,4 +1,3 @@
-// @ts-nocheck — bulk-converted legacy; typed properly is M9 follow-up
 /**
  * @module employeeSyncService
  * @description Sincronización de catálogo empleado desde RH/SAP.
@@ -7,54 +6,91 @@ import EmployeeModel from "~/contexts/onboarding/infrastructure/employeeModel.js
 
 const VALID_TYPES = new Set(["Alta", "Baja", "Cambio", "Reingreso"]);
 
-/**
- *
- * @param isoDate
- */
-function asDate(isoDate) {
+/** Error de sincronización con status HTTP (parity con el legacy). */
+type SyncError = { status: number; message: string };
+
+type SyncDetalle = {
+  noEmpleado: string;
+  nombre: string;
+  proveedor: string;
+  ceco: string;
+  fechaAlta: string;
+  tipo: string;
+  email?: string | null;
+  jefeInmediato?: string | null;
+};
+
+type SyncPayload = {
+  header?: { idTransaction?: string | number | null } | null;
+  detalle?: SyncDetalle | null;
+};
+
+type SyncReqUser = { user_name?: string | null; user_id?: string | number | null } | null;
+
+type SyncResult = {
+  idTransaction: string;
+  status: "success";
+  noEmpleado: string;
+  accion_realizada: "created" | "deactivated" | "reactivated" | "updated";
+};
+
+function asDate(isoDate: string): Date | null {
   const d = new Date(String(isoDate));
   if (Number.isNaN(d.getTime())) return null;
   return d;
 }
 
-/**
- *
- * @param payload
- */
-function validatePayload(payload) {
+function validatePayload(payload: SyncPayload): {
+  idTransaction: string;
+  detalle: SyncDetalle;
+  fechaAlta: Date;
+} {
   const idTransaction = payload?.header?.idTransaction;
   const detalle = payload?.detalle;
   if (!idTransaction || !detalle) {
-    throw { status: 400, message: "Payload inválido: header.idTransaction y detalle son obligatorios" };
+    const err: SyncError = {
+      status: 400,
+      message: "Payload inválido: header.idTransaction y detalle son obligatorios",
+    };
+    throw err;
   }
-  const required = ["noEmpleado", "nombre", "proveedor", "ceco", "fechaAlta", "tipo"];
+  const required: Array<keyof SyncDetalle> = [
+    "noEmpleado",
+    "nombre",
+    "proveedor",
+    "ceco",
+    "fechaAlta",
+    "tipo",
+  ];
   for (const k of required) {
-    if (!detalle?.[k]) throw { status: 400, message: `Campo obligatorio faltante: detalle.${k}` };
+    if (!detalle?.[k]) {
+      const err: SyncError = { status: 400, message: `Campo obligatorio faltante: detalle.${k}` };
+      throw err;
+    }
   }
   if (!VALID_TYPES.has(detalle.tipo)) {
-    throw { status: 400, message: "detalle.tipo debe ser Alta|Baja|Cambio|Reingreso" };
+    const err: SyncError = { status: 400, message: "detalle.tipo debe ser Alta|Baja|Cambio|Reingreso" };
+    throw err;
   }
   const parsed = asDate(detalle.fechaAlta);
-  if (!parsed) throw { status: 400, message: "detalle.fechaAlta debe ser fecha válida YYYY-MM-DD" };
+  if (!parsed) {
+    const err: SyncError = { status: 400, message: "detalle.fechaAlta debe ser fecha válida YYYY-MM-DD" };
+    throw err;
+  }
   return { idTransaction: String(idTransaction), detalle, fechaAlta: parsed };
 }
 
-/**
- *
- * @param reqUser
- */
-function actorFromReqUser(reqUser) {
+function actorFromReqUser(reqUser: SyncReqUser): string {
   if (reqUser?.user_name) return String(reqUser.user_name).slice(0, 30);
   if (reqUser?.user_id != null) return `user_${String(reqUser.user_id)}`.slice(0, 30);
   return "api_sync";
 }
 
-/**
- * @param {bigint|number|string} organizationId
- * @param {object} payload
- * @param {object|null} reqUser
- */
-export async function syncEmployee(organizationId, payload, reqUser = null) {
+export async function syncEmployee(
+  organizationId: bigint | number | string,
+  payload: SyncPayload,
+  reqUser: SyncReqUser = null,
+): Promise<SyncResult> {
   const { idTransaction, detalle, fechaAlta } = validatePayload(payload);
   const actor = actorFromReqUser(reqUser);
   const existing = await EmployeeModel.findByNoEmpleado(organizationId, detalle.noEmpleado);
@@ -70,7 +106,8 @@ export async function syncEmployee(organizationId, payload, reqUser = null) {
 
   if (detalle.tipo === "Alta") {
     if (existing) {
-      throw { status: 409, message: `Empleado ${detalle.noEmpleado} ya existe` };
+      const err: SyncError = { status: 409, message: `Empleado ${detalle.noEmpleado} ya existe` };
+      throw err;
     }
     await EmployeeModel.createEmpleado({
       organizationId: BigInt(organizationId),
@@ -87,7 +124,8 @@ export async function syncEmployee(organizationId, payload, reqUser = null) {
   }
 
   if (!existing) {
-    throw { status: 404, message: `Empleado ${detalle.noEmpleado} no existe` };
+    const err: SyncError = { status: 404, message: `Empleado ${detalle.noEmpleado} no existe` };
+    throw err;
   }
 
   if (detalle.tipo === "Baja") {

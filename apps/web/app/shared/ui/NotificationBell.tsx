@@ -1,80 +1,71 @@
 /**
  * Author: Hector Lugo
- * Description: NotificationBell component for the global header (M3-006).
- * Shows unread notification count as a badge and opens a dropdown with recent alerts.
- * Clicking a notification marks it as read via the API.
+ * Description: NotificationBell para el header global (M3-006), migrado a RR7.
+ *
+ * Data por loader (resource route `/api/notifications/:userId`) consumida vía
+ * `useFetcher` — CERO `fetch('/api/...')` ni `apiRequest`. La marca de leído
+ * muta por `useFetcher` contra la misma resource route (`PUT .../:id/read`),
+ * incluyendo el token CSRF (`_csrf`) leído de la cookie no-httpOnly `coco_csrf`.
+ *
+ * Prop-driven: recibe `initialNotifications` desde el loader que lo monta; si no
+ * llegan, hace un `fetcher.load` inicial. Hace polling cada 30 s revalidando.
  */
 import { useState, useEffect, useRef, useCallback } from "react";
+import { useFetcher } from "react-router";
 
-interface NotificationItem {
-  notificationId: number;
-  message: string;
-  isRead: boolean;
-  createdAt: string;
-}
+import type { NotificationItem } from "~/contexts/notifications/index.js";
 
 interface Props {
-  userId: string;
-  apiBase?: string;
+  userId: number | string;
+  initialNotifications?: NotificationItem[];
 }
 
-/**
- * Resolves the API base URL using the same logic as apiClient.ts.
- * Supports Docker (API_URL_SSR) and browser (PUBLIC_API_BASE_URL) environments.
- */
-function resolveApiBase(): string {
-  const isBrowser = typeof window !== "undefined";
-  if (!isBrowser && typeof process !== "undefined" && process.env.API_URL_SSR) {
-    return String(process.env.API_URL_SSR).replace(/\/$/, "");
-  }
-  return (import.meta.env?.PUBLIC_API_BASE_URL || "https://localhost:3000/api").replace(/\/$/, "");
+const POLL_MS = 30_000;
+const CSRF_COOKIE = "coco_csrf";
+
+/** Lee la cookie CSRF (no httpOnly) en el navegador. SSR-safe (devuelve ""). */
+function readCsrfToken(): string {
+  if (typeof document === "undefined") return "";
+  const match = document.cookie
+    .split("; ")
+    .find((row) => row.startsWith(`${CSRF_COOKIE}=`));
+  return match ? decodeURIComponent(match.slice(CSRF_COOKIE.length + 1)) : "";
 }
 
-/**
- * Helper to get CSRF token for mutating requests.
- */
-async function getCsrf(base: string): Promise<string> {
-  try {
-    const res = await fetch(`${base}/user/csrf-token`, {
-      credentials: "include",
-    });
-    const data = await res.json();
-    return data.csrfToken || "";
-  } catch {
-    return "";
-  }
-}
+export default function NotificationBell({ userId, initialNotifications }: Props) {
+  const listUrl = `/api/notifications/${userId}`;
+  const listFetcher = useFetcher<NotificationItem[]>();
+  const markFetcher = useFetcher();
 
-export default function NotificationBell({ userId }: Props) {
-  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
-  const [unreadCount, setUnreadCount] = useState(0);
+  const [notifications, setNotifications] = useState<NotificationItem[]>(
+    initialNotifications ?? [],
+  );
   const [open, setOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
-  const base = resolveApiBase();
 
-  const fetchNotifications = useCallback(async () => {
-    try {
-      const res = await fetch(`${base}/notifications/${userId}`, {
-        credentials: "include",
-      });
-      if (res.ok) {
-        const data: NotificationItem[] = await res.json();
-        setNotifications(data);
-        setUnreadCount(data.filter((n) => !n.isRead).length);
-      }
-    } catch (err) {
-      console.error("Error fetching notifications:", err);
-    }
-  }, [userId, base]);
+  const unreadCount = notifications.filter((n) => !n.isRead).length;
 
+  const refresh = useCallback(() => {
+    if (!userId) return;
+    listFetcher.load(listUrl);
+  }, [userId, listUrl, listFetcher]);
+
+  // Carga inicial (si no llegaron por prop) + polling.
   useEffect(() => {
     if (!userId) return;
-    fetchNotifications();
-    const interval = setInterval(fetchNotifications, 30_000); // poll every 30s
+    if (!initialNotifications) refresh();
+    const interval = setInterval(refresh, POLL_MS);
     return () => clearInterval(interval);
-  }, [userId, fetchNotifications]);
+  }, [userId, initialNotifications, refresh]);
 
-  // Close dropdown on outside click
+  // Sincroniza el estado local cuando llega data de la resource route.
+  useEffect(() => {
+    if (listFetcher.state === "idle" && Array.isArray(listFetcher.data)) {
+      setNotifications(listFetcher.data);
+    }
+  }, [listFetcher.state, listFetcher.data]);
+
+  // Cierra el dropdown al hacer click fuera.
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
       if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
@@ -85,26 +76,17 @@ export default function NotificationBell({ userId }: Props) {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  const markAsRead = async (notificationId: number) => {
-    try {
-      const csrf = await getCsrf(base);
-      await fetch(`${base}/notifications/${notificationId}/read`, {
-        method: "PUT",
-        credentials: "include",
-        headers: {
-          "Content-Type": "application/json",
-          ...(csrf ? { "csrf-token": csrf } : {}),
-        },
-      });
-      setNotifications((prev) =>
-        prev.map((n) =>
-          n.notificationId === notificationId ? { ...n, isRead: true } : n
-        )
-      );
-      setUnreadCount((prev) => Math.max(0, prev - 1));
-    } catch (err) {
-      console.error("Error marking notification as read:", err);
-    }
+  const markAsRead = (notificationId: number) => {
+    // Optimista: marca en UI y muta vía resource route.
+    setNotifications((prev) =>
+      prev.map((n) =>
+        n.notificationId === notificationId ? { ...n, isRead: true } : n,
+      ),
+    );
+    markFetcher.submit(
+      { _csrf: readCsrfToken() },
+      { method: "put", action: `/api/notifications/${notificationId}/read` },
+    );
   };
 
   const formatTime = (iso: string) => {
@@ -124,6 +106,7 @@ export default function NotificationBell({ userId }: Props) {
       {/* Bell button */}
       <button
         id="notification-bell-btn"
+        type="button"
         onClick={() => setOpen((o) => !o)}
         aria-label="Notificaciones"
         style={{
@@ -234,6 +217,7 @@ export default function NotificationBell({ userId }: Props) {
             notifications.map((n) => (
               <button
                 key={n.notificationId}
+                type="button"
                 onClick={() => !n.isRead && markAsRead(n.notificationId)}
                 style={{
                   display: "flex",

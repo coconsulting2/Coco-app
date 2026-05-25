@@ -1,5 +1,3 @@
-// @ts-nocheck — legacy CFDI logic; typed properly is M9 follow-up
-/* eslint-disable @typescript-eslint/no-explicit-any */
 /**
  * @module cfdiModel
  * @description CFDI UUID lookups against `cfdi_comprobantes` (tabla normalizada, alineada con M1-003).
@@ -7,25 +5,20 @@
  */
 import prisma from "~/platform/db/prisma.server.js";
 
+/** Referencia mínima de un CFDI por UUID (folio fiscal). */
+export type CfdiUuidRef = { receiptId: number; uuid: string };
+
 const CfdiModel = {
-  /**
-   * Detecta si el UUID (folio fiscal) ya está registrado en cfdi_comprobantes.
-   * @param {string} uuid - UUID del TimbreFiscalDigital
-   * @returns {Promise<{receiptId: number, uuid: string}|null>}
-   */
-  async findByCfdiUuid(uuid: any) {
-    return await prisma.cfdiComprobante.findUnique({
+  /** Detecta si el UUID (folio fiscal) ya está registrado en cfdi_comprobantes. */
+  async findByCfdiUuid(uuid: string): Promise<CfdiUuidRef | null> {
+    return prisma.cfdiComprobante.findUnique({
       where: { uuid },
       select: { receiptId: true, uuid: true },
     });
   },
 
-  /**
-   * Busca por UUID sin depender del casing guardado en BD.
-   * @param {string} uuid
-   * @returns {Promise<{ receiptId: number; uuid: string } | null>}
-   */
-  async findByCfdiUuidInsensitive(uuid: any) {
+  /** Busca por UUID sin depender del casing guardado en BD. */
+  async findByCfdiUuidInsensitive(uuid: string): Promise<CfdiUuidRef | null> {
     const u = String(uuid).trim();
     if (!u) return null;
     return prisma.cfdiComprobante.findFirst({

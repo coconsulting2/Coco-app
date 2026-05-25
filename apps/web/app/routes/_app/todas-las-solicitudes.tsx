@@ -1,17 +1,16 @@
-// @ts-nocheck — legacy route/view props mismatch; M11 UI follow-up
 /**
  * @module todas-las-solicitudes
- * @description Página migrada del legacy. Loader pide permiso y (si aplica)
- * carga el dato inicial via DI. Renderiza un componente legacy si existe en
- * shared/ui; si no, muestra placeholder marcado como migration target.
+ * @description Vista global de Cuentas por Pagar: todas las solicitudes en el
+ * historial CxP. El loader pide permiso `accounts_payable:attend` y carga la
+ * data real vía el use-case `listAllCxpRequests` del slice accounts-payable.
  */
 import type { LoaderFunctionArgs } from "react-router";
 import { useLoaderData } from "react-router";
 
 import { requirePermissions, runInTenant } from "~/platform/session/requireUser.server";
+import { listAllCxpRequests } from "~/contexts/accounts-payable";
 import CxPAllRequestsList from "~/shared/ui/RequestsLists/CxPAllRequestsList";
-
-
+import type { UserRole } from "~/shared/types/roles";
 
 export function meta() {
   return [{ title: "Todas las solicitudes — CocoConsulting" }];
@@ -19,11 +18,15 @@ export function meta() {
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const session = await requirePermissions(request, "accounts_payable:attend");
-  return { ok: true };
+  const role = session.user.role as UserRole;
+
+  const rows = await runInTenant(session, async () => listAllCxpRequests());
+
+  return { role, rows };
 }
 
 export default function PageRoute() {
-  const data = useLoaderData() as Awaited<ReturnType<typeof loader>>;
+  const { role, rows } = useLoaderData() as Awaited<ReturnType<typeof loader>>;
 
   return (
     <section className="max-w-5xl mx-auto space-y-8">
@@ -31,7 +34,7 @@ export default function PageRoute() {
         <p className="eyebrow text-xs uppercase tracking-widest text-[var(--color-ink-muted)]">Coco / CxP</p>
         <h1 className="font-serif text-3xl md:text-4xl">Todas las solicitudes</h1>
       </header>
-      <CxPAllRequestsList />
+      <CxPAllRequestsList data={rows} role={role} />
     </section>
   );
 }

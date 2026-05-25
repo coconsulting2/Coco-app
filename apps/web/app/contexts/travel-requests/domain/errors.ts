@@ -45,3 +45,15 @@ export class DuplicateCfdiError extends TravelRequestError {
     );
   }
 }
+
+export class ViaticasPolicyExceededError extends TravelRequestError {
+  constructor(message: string) {
+    super(message, "VIATICAS_POLICY_EXCEEDED", 422);
+  }
+}
+
+export class InvalidTravelRequestInputError extends TravelRequestError {
+  constructor(message: string) {
+    super(message, "INVALID_TRAVEL_REQUEST_INPUT", 400);
+  }
+}

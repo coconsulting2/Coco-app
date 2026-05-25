@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { apiRequest } from '@utils/apiClient';
+import { useFetcher } from 'react-router';
 import type { TravelRoute } from '~/shared/types/TravelRoute';
 import type { FormData } from '~/shared/types/FormData';
 import type { DepartmentData } from '~/shared/types/DepartmentData';
@@ -10,11 +10,18 @@ import Button from '~/shared/ui/Button';
 interface Props {
   data?: FormData;
   mode: 'create' | 'edit' | 'draft';
-  request_id?: string;
-  user_id: string;
   role?: string;
-  token: string;
+  /**
+   * Centro de costos cargado por el loader de la route padre. Todas las rutas
+   * (crear/editar/completar) lo proveen — sin fetch interno.
+   */
+  costCenter?: DepartmentData | null;
 }
+
+type SubmitIntent = 'create' | 'create-draft' | 'edit' | 'confirm';
+type FetcherResult =
+  | { ok: true; redirectTo?: string }
+  | { ok: false; error: string; code?: string };
 
 const emptyRoute: TravelRoute = {
   router_index: 0,
@@ -38,13 +45,14 @@ const initialFormState: FormData = {
   routes: [{ ...emptyRoute, router_index: 0 }],
 };
 
-export default function TravelRequestForm({ data, mode, request_id, user_id, role, token }: Props) {
-  const [deptData, setDeptData] = useState<DepartmentData | null>(null);
+export default function TravelRequestForm({ data, mode, role, costCenter }: Props) {
+  const [deptData] = useState<DepartmentData | null>(costCenter ?? null);
   const [formData, setFormData] = useState<FormData>(initialFormState);
   const [error, setError] = useState<string | null>(null);
   const [disabledButton, setDisabledButton] = useState<boolean>(false);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [displayFee, setDisplayFee] = useState<string>('');
+  const fetcher = useFetcher<FetcherResult>();
 
   const inputStyle = 'border border-gray-300 p-2 rounded w-full bg-white';
   useEffect(() => {
@@ -72,21 +80,22 @@ export default function TravelRequestForm({ data, mode, request_id, user_id, rol
     }
   }, [data]);
 
+  // Reacción al resultado de cualquier mutación RR7 (create/draft/edit/confirm).
   useEffect(() => {
-    async function fetchDepartmentInfo() {
-      try {
-        const response = await apiRequest(`/applicant/get-cc/${user_id}`, {
-          headers: {
-            Authorization: `Bearer ${token}`
-          }
-        });
-        setDeptData(response);
-      } catch (err) {
-        console.error('Error fetching department info:', err);
-      }
+    if (fetcher.state !== 'idle' || !fetcher.data) return;
+    if (fetcher.data.ok) {
+      setToast({ message: 'Operación realizada exitosamente.', type: 'success' });
+      const redirectTo = fetcher.data.redirectTo
+        ?? (role === 'Solicitante' ? '/dashboard' : '/solicitudes-autorizador');
+      setTimeout(() => {
+        window.location.href = redirectTo;
+      }, 1500);
+    } else {
+      const errorMsg = fetcher.data.error ?? 'Hubo un error al procesar la solicitud.';
+      setError(errorMsg);
+      setToast({ message: errorMsg, type: 'error' });
     }
-    fetchDepartmentInfo();
-  }, [user_id, token]);
+  }, [fetcher.state, fetcher.data, role]);
 
   const handleRouteUpdate = (index: number, name: string, value: any) => {
     setError(null)
@@ -198,39 +207,27 @@ export default function TravelRequestForm({ data, mode, request_id, user_id, rol
     }, duration);
   };
 
-  const handleSubmitRequest = async (e: React.FormEvent) => {
-    e.preventDefault();
-
-    const routeError = validateRoutes();
-    if (routeError) {
-      setError(routeError);
-      handleSetToast('Por favor, completa todos los campos requeridos de forma correcta antes de enviar la solicitud.', 'error');
-      return;
-    }
-
+  // Construye el body snake_case que consumen los mappers de las actions RR7.
+  const buildBody = () => {
     const firstRoute = formData.routes[0];
-    if (
-      !firstRoute.origin_country_name ||
-      !firstRoute.origin_city_name ||
-      !firstRoute.destination_country_name ||
-      !firstRoute.destination_city_name ||
-      !firstRoute.beginning_date ||
-      !firstRoute.beginning_time ||
-      !firstRoute.ending_date ||
-      !firstRoute.ending_time ||
-      !formData.requested_fee ||
-      !formData.notes
-    ) {
-      setError('Por favor, completa todos los campos requeridos de forma correcta antes de enviar la solicitud.');
-      handleSetToast('Por favor, completa todos los campos requeridos de forma correcta antes de enviar la solicitud.', 'error');
-      return;
-    }
-
-    setError(null);
-
-    const dataToSend = {
+    const additionalRoutes = formData.routes
+      .slice(1)
+      .map((route, idx) => ({ ...route, router_index: idx + 1 }))
+      .filter((route) =>
+        route.origin_country_name ||
+        route.origin_city_name ||
+        route.destination_country_name ||
+        route.destination_city_name ||
+        route.beginning_date ||
+        route.beginning_time ||
+        route.ending_date ||
+        route.ending_time ||
+        route.plane_needed ||
+        route.hotel_needed,
+      );
+    return {
       router_index: firstRoute.router_index,
-      notes: formData.notes,
+      notes: typeof formData.notes === 'string' ? formData.notes.trim() : '',
       requested_fee: parseFloat(formData.requested_fee as string) || 0,
       imposed_fee: 0,
       origin_country_name: firstRoute.origin_country_name,
@@ -243,228 +240,23 @@ export default function TravelRequestForm({ data, mode, request_id, user_id, rol
       ending_time: firstRoute.ending_time,
       plane_needed: firstRoute.plane_needed,
       hotel_needed: firstRoute.hotel_needed,
-      additionalRoutes: formData.routes.slice(1).map((route, idx) => ({
-      ...route,
-      router_index: idx + 1
-      })),
+      additionalRoutes,
     };
-    try {
-      await apiRequest(`/applicant/create-travel-request/${user_id}`, {
-        method: 'POST',
-        data: dataToSend,
-        headers: {
-          Authorization: `Bearer ${token}`
-        }
-      });
-      setToast({ message: 'Solicitud creada y enviada exitosamente.', type: 'success' });
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      if (role === "Solicitante") {
-        window.location.href = '/dashboard';
-      } else {
-        window.location.href = '/solicitudes-autorizador';
-      }
-    } catch (error) {
-      console.error('Error al enviar la solicitud:', error);
-      setError('Hubo un error al enviar la solicitud.');
-      setToast({ message: 'Hubo un error al enviar la solicitud.', type: 'error' });
-    }
   };
 
-  const handleSaveDraft = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const submitIntent = (intent: SubmitIntent) => {
+    const fd = new globalThis.FormData();
+    fd.set('intent', intent);
+    fd.set('body', JSON.stringify(buildBody()));
+    fetcher.submit(fd, { method: 'post' });
+  };
 
+  // Validación estricta (todos los campos requeridos del primer tramo + notas + cuota).
+  const validateStrict = (): string | null => {
     const routeError = validateRoutes();
-    if (routeError) {
-      handleSetToast(routeError + " Los campos válidos se guardarán en el borrador.", 'error', 4000);
-    }
-
-    const firstRoute = formData.routes[0] || {};
-    const draftData: Record<string, any> = {};
-
-    if (firstRoute.router_index !== undefined) draftData.router_index = firstRoute.router_index;
-    if (formData.notes) draftData.notes = formData.notes;
-    if (formData.requested_fee) draftData.requested_fee = parseFloat(formData.requested_fee as string) || 0;
-    draftData.imposed_fee = 0; // Always send imposed_fee as 0
-
-    if (firstRoute.origin_country_name) draftData.origin_country_name = firstRoute.origin_country_name;
-    if (firstRoute.origin_city_name) draftData.origin_city_name = firstRoute.origin_city_name;
-    if (firstRoute.destination_country_name) draftData.destination_country_name = firstRoute.destination_country_name;
-    if (firstRoute.destination_city_name) draftData.destination_city_name = firstRoute.destination_city_name;
-    if (firstRoute.beginning_date) draftData.beginning_date = firstRoute.beginning_date;
-    if (firstRoute.beginning_time) draftData.beginning_time = firstRoute.beginning_time;
-    if (firstRoute.ending_date) draftData.ending_date = firstRoute.ending_date;
-    if (firstRoute.ending_time) draftData.ending_time = firstRoute.ending_time;
-    if (firstRoute.plane_needed) draftData.plane_needed = firstRoute.plane_needed;
-    if (firstRoute.hotel_needed) draftData.hotel_needed = firstRoute.hotel_needed;
-
-    const additionalRoutes = formData.routes.slice(1)
-      .map((route, idx) => ({
-      ...route,
-      router_index: idx + 1
-      }))
-      .filter(route =>
-      route.origin_country_name ||
-      route.origin_city_name ||
-      route.destination_country_name ||
-      route.destination_city_name ||
-      route.beginning_date ||
-      route.beginning_time ||
-      route.ending_date ||
-      route.ending_time ||
-      route.plane_needed ||
-      route.hotel_needed
-      );
-
-    if (additionalRoutes.length > 0) {
-      draftData.additionalRoutes = additionalRoutes;
-    } else {
-      draftData.additionalRoutes = [];
-    }
-
-    try {
-      await apiRequest(`/applicant/create-draft-travel-request/${user_id}`, {
-        method: 'POST',
-        data: draftData,
-        headers: {
-          Authorization: `Bearer ${token}`
-        }
-      });
-      handleSetToast('Borrador guardado exitosamente.', 'success');
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      window.location.href = '/solicitudes-draft';
-    } catch (err) {
-      console.error('Error al guardar borrador:', err);
-      setError('Hubo un error al guardar el borrador.');
-      handleSetToast('Hubo un error al guardar el borrador. Por favor, inténtalo de nuevo.', 'error');
-    }
-  };
-
-  const handleEditRequest = async (
-    e: React.FormEvent,
-    completeForm: boolean,
-    href_route?: string
-  ): Promise<boolean> => {
-    e.preventDefault();
-
-    if (completeForm) {
-      const routeError = validateRoutes();
-      if (routeError) {
-        setError(routeError);
-        handleSetToast("Hubo un error al editar la solicitud. Por favor, inténtalo de nuevo.", 'error');
-        return false;
-      }
-
-      const firstRoute = formData.routes[0];
-      const missingFields = [
-        firstRoute.origin_country_name,
-        firstRoute.origin_city_name,
-        firstRoute.destination_country_name,
-        firstRoute.destination_city_name,
-        firstRoute.beginning_date,
-        firstRoute.beginning_time,
-        firstRoute.ending_date,
-        firstRoute.ending_time,
-        formData.requested_fee,
-        formData.notes,
-      ].some(field => !field);
-
-      if (missingFields) {
-        setError('Por favor, completa todos los campos requeridos de forma correcta antes de enviar la solicitud.');
-        handleSetToast('Por favor, completa todos los campos requeridos de forma correcta antes de enviar la solicitud.', 'error');
-        return false;
-      }
-    } else {
-      const routeError = validateRoutes();
-      if (routeError) {
-        handleSetToast(routeError + " Los cambios se guardarán, pero los campos de fecha/hora inválidos deberán corregirse para enviar la solicitud.", 'error', 5000);
-      }
-    }
-
-    setError(null);
-
-    let editedData: Record<string, any> = {};
+    if (routeError) return routeError;
     const firstRoute = formData.routes[0];
-
-    const includeIfExists = (key: string, value: any) => {
-      if (value !== undefined && value !== '' && value !== null) { // Add null check for robustness
-        editedData[key] = value;
-      }
-    };
-
-    includeIfExists('router_index', firstRoute.router_index);
-    editedData.notes = typeof formData.notes === 'string' ? formData.notes.trim() : '';
-    includeIfExists('requested_fee', parseFloat(formData.requested_fee as string));
-    editedData.imposed_fee = 0;
-    includeIfExists('origin_country_name', firstRoute.origin_country_name);
-    includeIfExists('origin_city_name', firstRoute.origin_city_name);
-    includeIfExists('destination_country_name', firstRoute.destination_country_name);
-    includeIfExists('destination_city_name', firstRoute.destination_city_name);
-    includeIfExists('beginning_date', firstRoute.beginning_date);
-    includeIfExists('beginning_time', firstRoute.beginning_time);
-    includeIfExists('ending_date', firstRoute.ending_date);
-    includeIfExists('ending_time', firstRoute.ending_time);
-    editedData.plane_needed = firstRoute.plane_needed;
-    editedData.hotel_needed = firstRoute.hotel_needed;
-
-    const additionalRoutes = formData.routes
-      .slice(1)
-      .map((route, idx) => ({
-        ...route,
-        router_index: idx + 1,
-      }))
-      .filter(route =>
-        route.origin_country_name ||
-        route.origin_city_name ||
-        route.destination_country_name ||
-        route.destination_city_name ||
-        route.beginning_date ||
-        route.beginning_time ||
-        route.ending_date ||
-        route.ending_time ||
-        route.plane_needed ||
-        route.hotel_needed
-      );
-
-    if (additionalRoutes.length > 0) {
-      editedData.additionalRoutes = additionalRoutes;
-    } else {
-      editedData.additionalRoutes = [];
-    }
-
-    try {
-      await apiRequest(`/applicant/edit-travel-request/${request_id}`, {
-        method: 'PUT',
-        data: editedData,
-        headers: {
-          Authorization: `Bearer ${token}`
-        }
-      });
-      if (href_route) {
-        setToast({ message: 'Cambios guardados exitosamente.', type: 'success' });
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        window.location.href = href_route;
-      }
-      return true;
-    } catch (err) {
-      console.error('Error al editar la solicitud:', err);
-      setError('Hubo un error al editar la solicitud. Por favor, inténtalo de nuevo.');
-      handleSetToast('Hubo un error al editar la solicitud. Por favor, inténtalo de nuevo.', 'error');
-      return false;
-    }
-  };
-
-    const handleFinishDraft = async (e: React.FormEvent) => {
-    e.preventDefault();
-    
-    const routeError = validateRoutes();
-    if (routeError) {
-      setError(routeError);
-      handleSetToast("Por favor, completa todos los campos requeridos de forma correcta antes de enviar la solicitud.", 'error');
-      return;
-    }
-
-    const firstRoute = formData.routes[0];
-    if (
+    const missing =
       !firstRoute.origin_country_name ||
       !firstRoute.origin_city_name ||
       !firstRoute.destination_country_name ||
@@ -474,31 +266,54 @@ export default function TravelRequestForm({ data, mode, request_id, user_id, rol
       !firstRoute.ending_date ||
       !firstRoute.ending_time ||
       !formData.requested_fee ||
-      !formData.notes
-    ) {
-      setError('Por favor, completa todos los campos requeridos de forma correcta antes de enviar la solicitud.');
-      handleSetToast('Por favor, completa todos los campos requeridos de forma correcta antes de enviar la solicitud.', 'error');
+      !formData.notes;
+    if (missing) {
+      return 'Por favor, completa todos los campos requeridos de forma correcta antes de enviar la solicitud.';
+    }
+    return null;
+  };
+
+  // create (Enviar) + confirm draft (Enviar): validación estricta.
+  const handleStrictSubmit = (intent: 'create' | 'confirm') => {
+    const err = validateStrict();
+    if (err) {
+      setError(err);
+      handleSetToast(err, 'error');
       return;
     }
+    setError(null);
+    submitIntent(intent);
+  };
 
-    const editSuccess = await handleEditRequest(e, true);
-    if (!editSuccess) return;
-
-    try {
-      await apiRequest(`/applicant/confirm-draft-travel-request/${user_id}/${request_id}`, {
-        method: 'PUT',
-        headers: {
-          Authorization: `Bearer ${token}`
-        }
-      });
-      handleSetToast('Borrador completado exitosamente.', 'success');
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      window.location.href = '/solicitudes-draft';
-    } catch (err) {
-      console.error('Error al completar el borrador:', err);
-      setError('Hubo un error al completar el borrador. Por favor, inténtalo de nuevo.');
-      handleSetToast('Hubo un error al completar el borrador. Por favor, inténtalo de nuevo.', 'error');
+  // create-draft (Guardar Borrador) + edit save-changes (Guardar Cambios):
+  // validación laxa — guarda lo que haya, avisa si hay fechas inválidas.
+  const handleLooseSubmit = (intent: 'create-draft' | 'edit') => {
+    const routeError = validateRoutes();
+    if (routeError) {
+      handleSetToast(routeError + ' Los campos válidos se guardarán.', 'error', 4000);
     }
+    setError(null);
+    submitIntent(intent);
+  };
+
+  // edit (Actualizar, mode='edit'): validación estricta.
+  const handleEditSubmit = () => {
+    const err = validateStrict();
+    if (err) {
+      setError(err);
+      handleSetToast(err, 'error');
+      return;
+    }
+    setError(null);
+    submitIntent('edit');
+  };
+
+  // Dispatcher del submit del <form> (Enter): acción primaria según modo.
+  const handleFormSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (mode === 'create') return handleStrictSubmit('create');
+    if (mode === 'edit') return handleEditSubmit();
+    return handleStrictSubmit('confirm');
   };
 
   const handleResetForm = () => {
@@ -508,7 +323,7 @@ export default function TravelRequestForm({ data, mode, request_id, user_id, rol
   };
 
   return (
-    <form onSubmit={handleSubmitRequest} className="space-y-8">
+    <form onSubmit={handleFormSubmit} className="space-y-8">
       {/* Nota de campos obligatorios */}
       <div className="flex items-center bg-gradient-to-r from-blue-50 to-blue-100 border-l-4 border-blue-500 p-4 rounded shadow-sm mb-4">
         <svg className="w-6 h-6 text-blue-500 mr-3" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
@@ -639,58 +454,54 @@ export default function TravelRequestForm({ data, mode, request_id, user_id, rol
         </Button>
         {mode == 'create' && (
           <div className='flex gap-3'>
-            <Button 
-              type="button" 
-              onClick={handleSaveDraft} 
+            <Button
+              type="button"
+              onClick={() => handleLooseSubmit('create-draft')}
               variant="border"
               color="primary"
-              disabled={disabledButton}
+              disabled={disabledButton || fetcher.state !== 'idle'}
             >
               Guardar Borrador
             </Button>
-            <Button 
-              type="button" 
-              onClick={handleSubmitRequest} 
+            <Button
+              type="button"
+              onClick={() => handleStrictSubmit('create')}
               variant="filled"
               color="success"
-              disabled={disabledButton}
+              disabled={disabledButton || fetcher.state !== 'idle'}
             >
               Enviar Solicitud
             </Button>
           </div>
         )}
         {mode == 'edit' && (
-          <Button 
+          <Button
             type="button"
-            onClick={async (e) => {
-              await handleEditRequest(e as unknown as React.FormEvent, true, '/dashboard');
-            }}
+            onClick={handleEditSubmit}
             variant="filled"
             color="primary"
-            disabled={disabledButton}
+            disabled={disabledButton || fetcher.state !== 'idle'}
           >
             Actualizar Solicitud
           </Button>
         )}
         {mode == 'draft' && (
           <div className='flex gap-3'>
-            <Button 
+            <Button
               type="button"
-              onClick={async (e) => {
-                await handleEditRequest(e as unknown as React.FormEvent, false, '/solicitudes-draft');
-              }}
+              onClick={() => handleLooseSubmit('edit')}
               variant="border"
               color="primary"
-              disabled={disabledButton}
+              disabled={disabledButton || fetcher.state !== 'idle'}
             >
               Guardar Cambios
             </Button>
-            <Button 
-              type="button" 
-              onClick={handleFinishDraft} 
+            <Button
+              type="button"
+              onClick={() => handleStrictSubmit('confirm')}
               variant="filled"
               color="success"
-              disabled={disabledButton}
+              disabled={disabledButton || fetcher.state !== 'idle'}
             >
               Enviar Solicitud
             </Button>

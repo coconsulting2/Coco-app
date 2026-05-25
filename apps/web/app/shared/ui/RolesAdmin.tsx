@@ -1,39 +1,38 @@
 /**
  * RolesAdmin — CRUD de roles y permisos por organización.
- * Con `apiEndpoint` usa GET/POST/PUT/DELETE `/api/admin/roles` y el catálogo
- * `/api/admin/permissions` para nombres de jefatura personalizados (N4, regional, etc.).
+ * Prop-driven: recibe los roles iniciales y el catálogo de permisos por props
+ * (precargados en el loader de `routes/_app/admin/roles`) y muta vía `useFetcher`
+ * contra la `action` de esa misma ruta (intents create/update/delete que invocan
+ * los use-cases hex del slice identity). Cero `apiRequest`/fetch a `/api/*`.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useForm, Controller } from "react-hook-form";
+import { useFetcher } from "react-router";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
-import Button from "@components/Button";
-import Modal from "@components/Modal";
-import Toast from "@components/Toast";
+import Button from "~/shared/ui/Button";
+import Modal from "~/shared/ui/Modal";
+import Toast from "~/shared/ui/Toast";
 import {
   ADMIN_PERMISSION_CODE,
   ALL_PERMISSION_CODES,
   PERMISSIONS_CATALOG,
-} from "@config/permissionsCatalog";
-import type { PermissionModule } from "@config/permissionsCatalog";
-import type { Role } from "@type/Role";
-import { apiRequest } from "@utils/apiClient";
-
-function getApiErrorMessage(err: unknown): string {
-  if (err && typeof err === "object" && "detail" in err) {
-    const detail = (err as { detail?: { response?: { error?: string } } }).detail;
-    const msg = detail?.response?.error;
-    if (msg) return String(msg);
-  }
-  return "Error al comunicarse con el servidor";
-}
+} from "~/shared/config/permissionsCatalog";
+import type { PermissionModule } from "~/shared/config/permissionsCatalog";
+import type { Role } from "~/shared/types/Role";
 
 type ApiPermissionRow = {
   code: string;
   resource: string;
   description?: string | null;
 };
+
+/** Resultado tipado de la `action` de `routes/_app/admin/roles`. */
+type RolesActionResult =
+  | { ok: true; intent: "create" | "update"; role: Role }
+  | { ok: true; intent: "delete"; roleId: number }
+  | { ok: false; error: string };
 
 function buildModulesFromApi(rows: ApiPermissionRow[]): PermissionModule[] {
   if (!rows.length) return PERMISSIONS_CATALOG;
@@ -57,63 +56,6 @@ function buildModulesFromApi(rows: ApiPermissionRow[]): PermissionModule[] {
         })),
     }));
 }
-
-const SEED_ROLES: Role[] = [
-  {
-    role_id: 1,
-    name: "Administrador",
-    permissions: ALL_PERMISSION_CODES,
-    max_authorization_amount: null,
-    expiration_date: null,
-    is_admin: true,
-    active_users_count: 2,
-  },
-  {
-    role_id: 2,
-    name: "Autorizador N1",
-    permissions: [
-      "viajes.solicitud.crear",
-      "viajes.autorizar.n1",
-      "gastos.aprobar",
-      "reportes.ver",
-    ],
-    max_authorization_amount: 25000,
-    expiration_date: null,
-    is_admin: false,
-    active_users_count: 4,
-  },
-  {
-    role_id: 3,
-    name: "Autorizador N2",
-    permissions: [
-      "viajes.solicitud.crear",
-      "viajes.autorizar.n1",
-      "viajes.autorizar.n2",
-      "gastos.aprobar",
-      "gastos.rechazar",
-      "reportes.ver",
-      "reportes.exportar",
-    ],
-    max_authorization_amount: 100000,
-    expiration_date: null,
-    is_admin: false,
-    active_users_count: 2,
-  },
-  {
-    role_id: 4,
-    name: "Solicitante",
-    permissions: [
-      "viajes.solicitud.crear",
-      "viajes.solicitud.editar",
-      "viajes.solicitud.cancelar",
-      "gastos.comprobante.subir",
-    ],
-    max_authorization_amount: 0,
-    expiration_date: null,
-    is_admin: false,
-    active_users_count: 18,
-  },
-];
 
 const roleSchema = z
   .object({
@@ -145,11 +87,10 @@ type Dialog =
 
 interface RolesAdminProps {
   initialData?: Role[];
-  /** Ej. `/admin/roles` (base ya incluye `/api`). */
-  apiEndpoint?: string;
-  /** Catálogo para los checkboxes; por defecto permisos activos del API. */
-  permissionsCatalogEndpoint?: string;
-  token?: string;
+  /** Catálogo RBAC para los checkboxes, precargado por el loader. */
+  permissionRows?: ApiPermissionRow[];
+  /** Token CSRF emitido por el loader; requerido por la `action`. */
+  csrfToken?: string;
 }
 
 const defaultFormValues: RoleFormValues = {
@@ -162,22 +103,34 @@ const defaultFormValues: RoleFormValues = {
 
 export default function RolesAdmin({
   initialData,
-  apiEndpoint,
-  permissionsCatalogEndpoint = "/admin/permissions?active_only=true",
-  token,
+  permissionRows,
+  csrfToken,
 }: RolesAdminProps) {
-  const [roles, setRoles] = useState<Role[]>(() =>
-    apiEndpoint ? initialData ?? [] : initialData ?? SEED_ROLES,
-  );
-  const [permissionModules, setPermissionModules] = useState<PermissionModule[]>(() =>
-    apiEndpoint ? [] : PERMISSIONS_CATALOG,
+  const fetcher = useFetcher<RolesActionResult>();
+  const submitting = fetcher.state !== "idle";
+  const pendingIntent = useRef<{ kind: "create" | "update" | "delete"; roleId?: number; name?: string } | null>(null);
+
+  const [roles, setRoles] = useState<Role[]>(() => initialData ?? []);
+  const [permissionModules] = useState<PermissionModule[]>(() =>
+    permissionRows && permissionRows.length
+      ? buildModulesFromApi(permissionRows)
+      : PERMISSIONS_CATALOG,
   );
   const [dialog, setDialog] = useState<Dialog>({ kind: "closed" });
-  const [submitting, setSubmitting] = useState(false);
+  const toastSeq = useRef(0);
   const [toast, setToast] = useState<{
+    id: number;
     message: string;
     type: "success" | "error" | "warning";
   } | null>(null);
+
+  const showToast = (
+    message: string,
+    type: "success" | "error" | "warning",
+  ) => {
+    toastSeq.current += 1;
+    setToast({ id: toastSeq.current, message, type });
+  };
 
   const {
     register,
@@ -200,46 +153,40 @@ export default function RolesAdmin({
     return codes.length ? codes : ALL_PERMISSION_CODES;
   }, [permissionModules]);
 
+  // Reconcilia el estado local con el resultado de la action (useFetcher).
   useEffect(() => {
-    if (!apiEndpoint) {
-      setPermissionModules(PERMISSIONS_CATALOG);
+    if (fetcher.state !== "idle" || !fetcher.data) return;
+    const data = fetcher.data;
+    const intent = pendingIntent.current;
+    pendingIntent.current = null;
+
+    const pushToast = (
+      message: string,
+      type: "success" | "error" | "warning",
+    ) => {
+      toastSeq.current += 1;
+      setToast({ id: toastSeq.current, message, type });
+    };
+
+    if (data.ok === false) {
+      pushToast(data.error, "error");
       return;
     }
-    let cancelled = false;
-    const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
-    (async () => {
-      try {
-        const permPath =
-          permissionsCatalogEndpoint && permissionsCatalogEndpoint.includes("?")
-            ? permissionsCatalogEndpoint
-            : `${permissionsCatalogEndpoint ?? "/admin/permissions"}?active_only=true`;
-        const [rolesData, permData] = await Promise.all([
-          apiRequest<Role[]>(apiEndpoint, { headers }),
-          apiRequest<ApiPermissionRow[]>(permPath, { headers }),
-        ]);
-        if (cancelled) return;
-        if (Array.isArray(rolesData)) setRoles(rolesData);
-        if (Array.isArray(permData) && permData.length > 0) {
-          setPermissionModules(buildModulesFromApi(permData));
-        } else {
-          setPermissionModules(PERMISSIONS_CATALOG);
-        }
-      } catch (err) {
-        console.warn("[RolesAdmin] fetch failed", err);
-        if (!cancelled) {
-          setPermissionModules(PERMISSIONS_CATALOG);
-          setToast({
-            type: "warning",
-            message:
-              "No se pudieron cargar roles o permisos desde el servidor. Revisa tu sesión y que tengas permiso de gestión de roles.",
-          });
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [apiEndpoint, permissionsCatalogEndpoint, token]);
+
+    if (data.intent === "create") {
+      setRoles((prev) => [...prev, data.role]);
+      pushToast("Rol creado correctamente", "success");
+      setDialog({ kind: "closed" });
+    } else if (data.intent === "update") {
+      setRoles((prev) => prev.map((r) => (r.role_id === data.role.role_id ? data.role : r)));
+      pushToast("Rol actualizado", "success");
+      setDialog({ kind: "closed" });
+    } else if (data.intent === "delete") {
+      setRoles((prev) => prev.filter((r) => r.role_id !== data.roleId));
+      pushToast(`Rol "${intent?.name ?? ""}" eliminado`.trim(), "success");
+      setDialog({ kind: "closed" });
+    }
+  }, [fetcher.state, fetcher.data]);
 
   const adminCount = useMemo(
     () => roles.filter((r) => r.is_admin).length,
@@ -267,7 +214,6 @@ export default function RolesAdmin({
 
   const closeDialog = () => {
     setDialog({ kind: "closed" });
-    setSubmitting(false);
   };
 
   const togglePermission = (code: string) => {
@@ -294,175 +240,89 @@ export default function RolesAdmin({
     });
   };
 
-  const onSubmit = async (values: RoleFormValues) => {
-    const parsed = {
-      name: values.name,
-      permissions: values.permissions,
-      max_authorization_amount:
-        values.max_authorization_amount === ""
-          ? null
-          : values.max_authorization_amount,
-      expiration_date:
-        values.expiration_date && values.expiration_date.trim()
-          ? values.expiration_date
-          : null,
-      is_admin: values.is_admin,
-    };
+  const submitIntent = (
+    intent: "create" | "update" | "delete",
+    fields: Record<string, string>,
+    meta: { roleId?: number; name?: string },
+  ) => {
+    pendingIntent.current = { kind: intent, ...meta };
+    fetcher.submit(
+      { _intent: intent, _csrf: csrfToken ?? "", ...fields },
+      { method: "post" },
+    );
+  };
+
+  const onSubmit = (values: RoleFormValues) => {
+    const amount =
+      values.max_authorization_amount === ""
+        ? ""
+        : String(values.max_authorization_amount);
+    const expiration =
+      values.expiration_date && values.expiration_date.trim()
+        ? values.expiration_date
+        : "";
 
     if (dialog.kind === "edit" && dialog.role.is_system) {
-      setSubmitting(true);
-      try {
-        if (apiEndpoint) {
-          const updated = await apiRequest<Role>(`${apiEndpoint}/${dialog.role.role_id}`, {
-            method: "PUT",
-            data: {
-              max_authorization_amount: parsed.max_authorization_amount,
-            },
-            headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-          });
-          setRoles((prev) => prev.map((r) => (r.role_id === updated.role_id ? updated : r)));
-        } else {
-          setRoles((prev) =>
-            prev.map((r) =>
-              r.role_id === dialog.role.role_id
-                ? { ...r, max_authorization_amount: parsed.max_authorization_amount ?? null }
-                : r
-            )
-          );
-        }
-        setToast({ message: "Rol actualizado", type: "success" });
-        closeDialog();
-      } catch (err) {
-        setToast({ message: getApiErrorMessage(err), type: "error" });
-        setSubmitting(false);
-      }
+      // Roles de sistema: solo se envía el monto máximo.
+      submitIntent(
+        "update",
+        {
+          role_id: String(dialog.role.role_id),
+          max_authorization_amount: amount,
+        },
+        { roleId: dialog.role.role_id, name: dialog.role.name },
+      );
       return;
     }
 
-    if (dialog.kind === "edit" && dialog.role.is_admin && !parsed.is_admin) {
-      if (adminCount <= 1) {
-        setToast({
-          message: "No puedes quitar el último rol administrador del sistema.",
-          type: "error",
-        });
-        return;
-      }
+    if (dialog.kind === "edit" && dialog.role.is_admin && !values.is_admin && adminCount <= 1) {
+      showToast("No puedes quitar el último rol administrador del sistema.", "error");
+      return;
     }
 
-    setSubmitting(true);
-    try {
-      if (dialog.kind === "create") {
-        const payload = {
-          name: parsed.name,
-          permissions: parsed.permissions,
-          max_authorization_amount: parsed.max_authorization_amount ?? null,
-          expiration_date: parsed.expiration_date ?? null,
-          is_admin: parsed.is_admin,
-        };
-        let created: Role | null = null;
-        if (apiEndpoint) {
-          try {
-            created = await apiRequest<Role>(apiEndpoint, {
-              method: "POST",
-              data: payload,
-              headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-            });
-          } catch (err) {
-            setToast({ message: getApiErrorMessage(err), type: "error" });
-            setSubmitting(false);
-            return;
-          }
-        }
-        const nextId =
-          created?.role_id ??
-          roles.reduce((m, r) => Math.max(m, r.role_id), 0) + 1;
-        setRoles((prev) => [
-          ...prev,
-          created ?? {
-            role_id: nextId,
-            active_users_count: 0,
-            is_system: false,
-            ...payload,
-          },
-        ]);
-        setToast({ message: "Rol creado correctamente", type: "success" });
-      } else if (dialog.kind === "edit") {
-        const payload = {
-          name: parsed.name,
-          permissions: parsed.permissions,
-          max_authorization_amount: parsed.max_authorization_amount ?? null,
-          expiration_date: parsed.expiration_date ?? null,
-          is_admin: parsed.is_admin,
-        };
-        if (apiEndpoint) {
-          try {
-            const updated = await apiRequest<Role>(`${apiEndpoint}/${dialog.role.role_id}`, {
-              method: "PUT",
-              data: payload,
-              headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-            });
-            setRoles((prev) => prev.map((r) => (r.role_id === dialog.role.role_id ? updated : r)));
-          } catch (err) {
-            setToast({ message: getApiErrorMessage(err), type: "error" });
-            setSubmitting(false);
-            return;
-          }
-        } else {
-          setRoles((prev) =>
-            prev.map((r) =>
-              r.role_id === dialog.role.role_id ? { ...r, ...payload } : r
-            )
-          );
-        }
-        setToast({ message: "Rol actualizado", type: "success" });
-      }
-      closeDialog();
-    } catch (err) {
-      console.error(err);
-      setToast({ message: "Error al guardar el rol", type: "error" });
-      setSubmitting(false);
+    const baseFields: Record<string, string> = {
+      name: values.name,
+      permissions: JSON.stringify(values.permissions),
+      max_authorization_amount: amount,
+      expiration_date: expiration,
+      is_admin: values.is_admin ? "true" : "false",
+    };
+
+    if (dialog.kind === "create") {
+      submitIntent("create", baseFields, {});
+    } else if (dialog.kind === "edit") {
+      submitIntent(
+        "update",
+        { role_id: String(dialog.role.role_id), ...baseFields },
+        { roleId: dialog.role.role_id, name: dialog.role.name },
+      );
     }
   };
 
-  const handleDelete = async () => {
+  const handleDelete = () => {
     if (dialog.kind !== "delete") return;
     const role = dialog.role;
 
     if (role.is_system) {
-      setToast({
-        message: "No se pueden eliminar roles de sistema (N1, Solicitante, Administrador, etc.).",
-        type: "error",
-      });
+      showToast(
+        "No se pueden eliminar roles de sistema (N1, Solicitante, Administrador, etc.).",
+        "error",
+      );
       closeDialog();
       return;
     }
 
     if (role.is_admin && adminCount <= 1) {
-      setToast({
-        message: "No puedes eliminar el último rol administrador del sistema.",
-        type: "error",
-      });
+      showToast("No puedes eliminar el último rol administrador del sistema.", "error");
       closeDialog();
       return;
     }
 
-    setSubmitting(true);
-    if (apiEndpoint) {
-      try {
-        await apiRequest(`${apiEndpoint}/${role.role_id}`, {
-          method: "DELETE",
-          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-        });
-      } catch (err) {
-        setToast({ message: getApiErrorMessage(err), type: "error" });
-        setSubmitting(false);
-        closeDialog();
-        return;
-      }
-    }
-    setRoles((prev) => prev.filter((r) => r.role_id !== role.role_id));
-    setToast({ message: `Rol "${role.name}" eliminado`, type: "success" });
-    closeDialog();
+    submitIntent(
+      "delete",
+      { role_id: String(role.role_id) },
+      { roleId: role.role_id, name: role.name },
+    );
   };
 
   const dialogOpen = dialog.kind !== "closed";
@@ -835,7 +695,7 @@ export default function RolesAdmin({
 
       {toast && (
         <Toast
-          key={toast.message + toast.type + Date.now()}
+          key={toast.id}
           message={toast.message}
           type={toast.type}
           duration={toast.type === "success" ? 3000 : 5000}

@@ -41,3 +41,11 @@ export async function updateRule(
 ): Promise<WorkflowRule> {
   return deps.rules.updateRule(id, patch);
 }
+
+export async function toggleRule(
+  id: bigint | number,
+  organizationId: bigint,
+  deps: ManageRulesDeps,
+): Promise<WorkflowRule> {
+  return deps.rules.toggleRule(id, organizationId);
+}

@@ -1,91 +1,68 @@
 /**
  * @module UploadReceiptFiles
- * @description Componente "fire-and-forget" para subir archivos de
- * comprobante asociados a una solicitud. Histórico: se invocaba con
- * `pdfFile` / `xmlFile` ya escogidos por el usuario y disparaba un `fetch`
- * a `/api/files/upload-receipt-files/:id` cuando cambiaban.
- *
- * Las rutas `subir-comprobante.$id` / `resubir-comprobante.$id` lo
- * renderizan pasando únicamente `requestId` (y opcionalmente `resubmit`);
- * los archivos se eligen dentro del componente vía un `<input type="file">`
- * y se envían al endpoint Swagger M1 público — ese endpoint es **kept**
- * (no se retira) en el contrato `apps/web/app/routes/api/README.md`.
+ * @description Componente de subida de archivos de comprobante (PDF/XML).
+ * Migrado a React Router 7: cero `fetch('/api/...')`, cero `apiRequest`. Los
+ * archivos se eligen aquí y se envían como `FormData` multipart vía
+ * `useFetcher` con `intent="uploadFiles"` al action de la route padre, que
+ * sube a GridFS vía los use-cases del slice receipts-cfdi.
  */
-import { useState } from "react";
-
-const API_BASE_URL =
-  (typeof window !== "undefined"
-    ? (window as unknown as { __API_BASE__?: string }).__API_BASE__
-    : undefined) ??
-  (typeof process !== "undefined" ? process.env.PUBLIC_API_BASE_URL : undefined) ??
-  "https://localhost:3000/api";
+import { useEffect, useRef, useState } from "react";
+import { useFetcher } from "react-router";
 
 interface Props {
   requestId: number;
   resubmit?: boolean;
-  /** Optional: ID del receipt a reemplazar (modo resubmit). */
+  /** ID del receipt a reemplazar (modo resubmit). */
   receiptToReplace?: string | null;
 }
+
+type FetcherResult = { ok: true } | { ok: false; error: string };
 
 export default function UploadReceiptFiles({
   requestId,
   resubmit = false,
   receiptToReplace = null,
 }: Props) {
+  const fetcher = useFetcher<FetcherResult>();
   const [pdfFile, setPdfFile] = useState<File | null>(null);
   const [xmlFile, setXmlFile] = useState<File | null>(null);
-  const [uploading, setUploading] = useState(false);
   const [status, setStatus] = useState<{ type: "success" | "error"; message: string } | null>(null);
+  const pdfRef = useRef<HTMLInputElement>(null);
+  const xmlRef = useRef<HTMLInputElement>(null);
 
-  async function upload() {
-    if (!pdfFile && !xmlFile) {
-      setStatus({ type: "error", message: "Adjunta al menos un archivo PDF o XML." });
-      return;
-    }
-    setUploading(true);
-    setStatus(null);
-    try {
-      const formData = new FormData();
-      if (pdfFile) formData.append("pdf", pdfFile);
-      if (xmlFile) formData.append("xml", xmlFile);
+  const uploading = fetcher.state !== "idle";
 
-      const response = await fetch(
-        `${API_BASE_URL}/files/upload-receipt-files/${requestId}`,
-        {
-          method: "POST",
-          body: formData,
-          credentials: "include",
-        },
-      );
-      if (!response.ok) {
-        throw new Error("Error al subir los archivos");
-      }
-
-      if (resubmit && receiptToReplace) {
-        try {
-          await fetch(
-            `${API_BASE_URL}/applicant/delete-receipt/${receiptToReplace}`,
-            { method: "DELETE", credentials: "include" },
-          );
-        } catch (delErr) {
-          console.error("Error eliminando comprobante anterior:", delErr);
-        }
-      }
-
+  useEffect(() => {
+    if (fetcher.state !== "idle" || !fetcher.data) return;
+    if (fetcher.data.ok) {
       setStatus({
         type: "success",
         message: resubmit
           ? "Comprobante reemplazado correctamente."
           : "Archivos subidos correctamente.",
       });
-    } catch (err) {
+    } else {
       setStatus({
         type: "error",
-        message: err instanceof Error ? err.message : "Error desconocido al subir los archivos.",
+        message: fetcher.data.error ?? "Error desconocido al subir los archivos.",
       });
-    } finally {
-      setUploading(false);
     }
+  }, [fetcher.state, fetcher.data, resubmit]);
+
+  function upload() {
+    if (!pdfFile && !xmlFile) {
+      setStatus({ type: "error", message: "Adjunta al menos un archivo PDF o XML." });
+      return;
+    }
+    setStatus(null);
+    const fd = new FormData();
+    fd.set("intent", "uploadFiles");
+    fd.set("requestId", String(requestId));
+    fd.set("resubmit", String(resubmit));
+    if (receiptToReplace) fd.set("receiptToReplace", receiptToReplace);
+    if (pdfFile) fd.set("pdf", pdfFile);
+    if (xmlFile) fd.set("xml", xmlFile);
+    fetcher.submit(fd, { method: "post", encType: "multipart/form-data" });
   }
 
   return (
@@ -104,6 +81,7 @@ export default function UploadReceiptFiles({
             PDF
           </label>
           <input
+            ref={pdfRef}
             type="file"
             accept=".pdf,application/pdf"
             onChange={(e) => setPdfFile(e.target.files?.[0] ?? null)}
@@ -115,6 +93,7 @@ export default function UploadReceiptFiles({
             XML
           </label>
           <input
+            ref={xmlRef}
             type="file"
             accept=".xml,text/xml,application/xml"
             onChange={(e) => setXmlFile(e.target.files?.[0] ?? null)}
@@ -125,7 +104,7 @@ export default function UploadReceiptFiles({
 
       <button
         type="button"
-        onClick={() => void upload()}
+        onClick={upload}
         disabled={uploading}
         className="px-4 py-2 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 disabled:bg-gray-400"
       >

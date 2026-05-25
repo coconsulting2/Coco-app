@@ -18,8 +18,8 @@
 
 */
 
-import { getSession } from "@data/cookies";
-import { getImpersonatedOrgId } from "@stores/organizationStore";
+import { getSession } from "~/shared/data/cookies";
+import { getImpersonatedOrgId } from "~/shared/stores/organizationStore";
 
 /**
  * Default same-origin: `/api`. En coco-app, front y back viven en el mismo

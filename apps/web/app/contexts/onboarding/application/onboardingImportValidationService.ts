@@ -1,45 +1,48 @@
-// @ts-nocheck — bulk-converted legacy; typed properly is M9 follow-up
 /**
  * @module onboardingImportValidationService
  * @description Validación de los DTOs normalizados antes de persistirlos.
  *
  * No hace queries a la BD: solo valida el formato/reglas de negocio en memoria.
  * La detección de duplicados contra la BD se hace en onboardingImportService.
- *
- * @typedef {import('./strategies/BaseImportStrategy.js').ImportUserDTO} ImportUserDTO
- * @typedef {{ row: number, field: string, message: string }} ValidationError
  */
+import type {
+  ImportUserDTO,
+  ImportValidationError,
+} from "~/contexts/onboarding/domain/entities/ImportUser";
+
+/** DTO con los campos de resolución de rol añadidos en el preview. */
+export type ProcessedImportRow = ImportUserDTO & {
+  hasFilePassword?: boolean;
+  mappedRoleName?: string | null;
+  externalRoleLabel?: string | null;
+};
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const USERNAME_RE = /^[a-z0-9._-]{3,64}$/;
-// Mínimo 8 caracteres, al menos una mayúscula, una minúscula y un número
+// Mínimo 8 caracteres, al menos una mayúscula, una minúscula y un número.
 const PASSWORD_RE = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/;
 
-/**
- * @param {string} s
- * @returns {boolean}
- */
-export function isValidImportPassword(s) {
+export function isValidImportPassword(s: unknown): boolean {
   return typeof s === "string" && PASSWORD_RE.test(s);
 }
 
 /**
- * Valida un array de ImportUserDTO.
- *
- * @param {ImportUserDTO[]} rows
- * @param {string[]} validRoleNames  - roles existentes en la org destino.
- * @returns {{ valid: ImportUserDTO[], errors: ValidationError[] }}
+ * Valida un array de filas procesadas.
+ * @param validRoleNames Roles existentes en la org destino.
  */
-export function validateImportRows(rows, validRoleNames) {
+export function validateImportRows(
+  rows: ProcessedImportRow[],
+  validRoleNames: string[],
+): { valid: ProcessedImportRow[]; errors: ImportValidationError[] } {
   const validRoleSet = new Set(validRoleNames.map((r) => r.toLowerCase()));
-  const errors = [];
-  const valid = [];
-  const seenUsernames = new Set();
-  const seenEmails = new Set();
+  const errors: ImportValidationError[] = [];
+  const valid: ProcessedImportRow[] = [];
+  const seenUsernames = new Set<string>();
+  const seenEmails = new Set<string>();
 
   rows.forEach((row, i) => {
     const rowNum = row._row ?? i + 1;
-    const rowErrors = [];
+    const rowErrors: ImportValidationError[] = [];
 
     // userName
     if (!row.userName) {
@@ -67,10 +70,7 @@ export function validateImportRows(rows, validRoleNames) {
       seenEmails.add(row.email);
     }
 
-    // password
-    // La contraseña del archivo es OPCIONAL: por seguridad, las contraseñas reales
-    // se definen al aplicar (passwordGlobal o passwordOverrides). Si vino en el
-    // archivo, validamos formato para avisar al admin antes de descartarla.
+    // password (opcional; del archivo se descarta, pero validamos formato para avisar)
     if (row.password && !PASSWORD_RE.test(row.password)) {
       rowErrors.push({
         row: rowNum,
@@ -79,7 +79,7 @@ export function validateImportRows(rows, validRoleNames) {
       });
     }
 
-    // Rol: ya resuelto contra la org (mappedRoleName) o etiqueta externa pendiente (externalRoleLabel)
+    // Rol: ya resuelto (mappedRoleName) o etiqueta externa pendiente (externalRoleLabel)
     if (!row.mappedRoleName && !row.externalRoleLabel) {
       rowErrors.push({
         row: rowNum,

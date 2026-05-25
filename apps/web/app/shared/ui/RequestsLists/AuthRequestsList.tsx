@@ -4,9 +4,9 @@
  **/
 
 import { useState, useEffect } from 'react';
-import DataTable from '@components/Table/DataTable';
-import Pagination from '@components/Table/Pagination';
-import type { UserRole } from "@type/roles";
+import DataTable from '~/shared/ui/Table/DataTable';
+import Pagination from '~/shared/ui/Table/Pagination';
+import type { UserRole } from "~/shared/types/roles";
 
 interface Props {
   data: any[];

@@ -3,7 +3,7 @@
  * helpers exist only for UX (hide/show affordances). Never rely on them
  * for security; every sensitive action must be gated server-side.
  */
-import type { PermissionCode } from "@type/permissions";
+import type { PermissionCode } from "~/shared/types/permissions";
 
 /** Normalises input into a Set for O(1) lookups. */
 const toSet = (perms: Iterable<PermissionCode> | null | undefined): Set<PermissionCode> => {

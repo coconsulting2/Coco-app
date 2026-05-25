@@ -2,18 +2,20 @@
  * ExpenseTypeMappingAdmin — Associates each ReceiptType (Avión, Hotel, …)
  * to a cargo and abono accounting account, plus an optional tax indicator.
  *
- * Reuses the catalogs managed by AccountingAccountAdmin and
- * TaxIndicatorAdmin. The form enforces that cargo and abono are different
- * accounts. Currently runs on seed data; wire `apiEndpoint`,
- * `accountsEndpoint`, `receiptTypesEndpoint` and `taxIndicatorsEndpoint`
- * once the M3 backend ships (all filtered by orgId on the server).
+ * Prop-driven: recibe mapeos + cuentas + tipos de comprobante + indicadores por
+ * props (precargados en el loader de `routes/_app/admin/mapeo-gastos`) y muta
+ * vía `useFetcher` contra la `action` de esa misma ruta (intents
+ * create/update/delete que invocan los use-cases hex del slice
+ * accounts-payable). El form exige que cargo y abono sean cuentas distintas.
+ * Cero `apiRequest`/fetch a `/api/*`.
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import Button from "@components/Button";
-import Modal from "@components/Modal";
-import Toast from "@components/Toast";
-import { TAX_INDICATOR_TYPE_LABEL } from "@type/AccountingAccount";
+import { useFetcher } from "react-router";
+import Button from "~/shared/ui/Button";
+import Modal from "~/shared/ui/Modal";
+import Toast from "~/shared/ui/Toast";
+import { TAX_INDICATOR_TYPE_LABEL } from "~/shared/types/AccountingAccount";
 import type {
   AccountingAccount,
   ExpenseTypeMapping,
@@ -21,115 +23,28 @@ import type {
   ExpenseTypeMappingFormValues,
   ReceiptType,
   TaxIndicator,
-} from "@type/AccountingAccount";
-import { apiRequest } from "@utils/apiClient";
+} from "~/shared/types/AccountingAccount";
 
 interface ExpenseTypeMappingAdminProps {
   initialMappings?: ExpenseTypeMapping[];
   initialAccounts?: AccountingAccount[];
   initialReceiptTypes?: ReceiptType[];
   initialTaxIndicators?: TaxIndicator[];
-  apiEndpoint?: string;
-  accountsEndpoint?: string;
-  receiptTypesEndpoint?: string;
-  taxIndicatorsEndpoint?: string;
-  token?: string;
+  /** Token CSRF emitido por el loader; requerido por la `action`. */
+  csrfToken?: string;
 }
+
+/** Resultado tipado de la `action` de `routes/_app/admin/mapeo-gastos`. */
+type ExpenseTypeMappingActionResult =
+  | { ok: true; intent: "create" | "update"; mapping: ExpenseTypeMapping }
+  | { ok: true; intent: "delete"; id: number }
+  | { ok: false; error: string };
 
 type Dialog =
   | { kind: "closed" }
   | { kind: "create" }
   | { kind: "edit"; mapping: ExpenseTypeMapping }
   | { kind: "delete"; mapping: ExpenseTypeMapping };
-
-const SEED_RECEIPT_TYPES: ReceiptType[] = [
-  { receipt_type_id: 1, name: "Avión", description: "Vuelos nacionales e internacionales" },
-  { receipt_type_id: 2, name: "Hotel", description: "Hospedaje" },
-  { receipt_type_id: 3, name: "Alimentos", description: "Comidas y consumos" },
-  { receipt_type_id: 4, name: "Transporte terrestre", description: "Taxi, Uber, autobús" },
-  { receipt_type_id: 5, name: "Casetas y peaje", description: "Casetas de cuota" },
-];
-
-const SEED_ACCOUNTS: AccountingAccount[] = [
-  {
-    accounting_account_id: 1,
-    org_id: 1,
-    account_number: "6100-001",
-    description: "Gastos de viaje · Avión",
-    type: "GASTOS",
-    currency: "MXN",
-  },
-  {
-    accounting_account_id: 2,
-    org_id: 1,
-    account_number: "6100-002",
-    description: "Gastos de viaje · Hotel",
-    type: "GASTOS",
-    currency: "MXN",
-  },
-  {
-    accounting_account_id: 3,
-    org_id: 1,
-    account_number: "1107-001",
-    description: "Anticipos a empleados",
-    type: "ANTICIPOS",
-    currency: "MXN",
-  },
-  {
-    accounting_account_id: 4,
-    org_id: 1,
-    account_number: "2102-001",
-    description: "Cuentas por pagar · Proveedores",
-    type: "ACREEDORES",
-    currency: "MXN",
-  },
-];
-
-const SEED_TAX_INDICATORS: TaxIndicator[] = [
-  {
-    tax_indicator_id: 1,
-    org_id: 1,
-    key: "IVA16",
-    description: "IVA 16% acreditable",
-    percentage: 16,
-    type: "IVA_TRASLADADO",
-  },
-  {
-    tax_indicator_id: 2,
-    org_id: 1,
-    key: "RET-IVA",
-    description: "Retención de IVA 10.67%",
-    percentage: 10.67,
-    type: "IVA_RETENIDO",
-  },
-  {
-    tax_indicator_id: 3,
-    org_id: 1,
-    key: "RET-ISR",
-    description: "Retención de ISR 10%",
-    percentage: 10,
-    type: "ISR_RETENIDO",
-  },
-];
-
-const SEED_MAPPINGS: ExpenseTypeMapping[] = [
-  {
-    expense_type_mapping_id: 1,
-    org_id: 1,
-    receipt_type_id: 1,
-    cargo_account_id: 1,
-    abono_account_id: 4,
-    tax_indicator_id: 1,
-  },
-  {
-    expense_type_mapping_id: 2,
-    org_id: 1,
-    receipt_type_id: 2,
-    cargo_account_id: 2,
-    abono_account_id: 4,
-    tax_indicator_id: 1,
-  },
-];
 
 const emptyForm: ExpenseTypeMappingFormValues = {
   receipt_type_id: null,
@@ -143,115 +58,55 @@ export default function ExpenseTypeMappingAdmin({
   initialAccounts,
   initialReceiptTypes,
   initialTaxIndicators,
-  apiEndpoint,
-  accountsEndpoint,
-  receiptTypesEndpoint,
-  taxIndicatorsEndpoint,
-  token,
+  csrfToken,
 }: ExpenseTypeMappingAdminProps) {
+  const fetcher = useFetcher<ExpenseTypeMappingActionResult>();
+  const submitting = fetcher.state !== "idle";
+
   const [mappings, setMappings] = useState<ExpenseTypeMapping[]>(
-    initialMappings ?? SEED_MAPPINGS
+    initialMappings ?? []
   );
-  const [accounts, setAccounts] = useState<AccountingAccount[]>(
-    initialAccounts ?? SEED_ACCOUNTS
-  );
-  const [receiptTypes, setReceiptTypes] = useState<ReceiptType[]>(
-    initialReceiptTypes ?? SEED_RECEIPT_TYPES
-  );
-  const [taxIndicators, setTaxIndicators] = useState<TaxIndicator[]>(
-    initialTaxIndicators ?? SEED_TAX_INDICATORS
-  );
+  const [accounts] = useState<AccountingAccount[]>(initialAccounts ?? []);
+  const [receiptTypes] = useState<ReceiptType[]>(initialReceiptTypes ?? []);
+  const [taxIndicators] = useState<TaxIndicator[]>(initialTaxIndicators ?? []);
   const [dialog, setDialog] = useState<Dialog>({ kind: "closed" });
   const [form, setForm] = useState<ExpenseTypeMappingFormValues>(emptyForm);
   const [errors, setErrors] = useState<ExpenseTypeMappingFormErrors>({});
-  const [submitting, setSubmitting] = useState(false);
   const [toast, setToast] = useState<
     { message: string; type: "success" | "error" } | null
   >(null);
 
+  // Reconcilia el estado local con el resultado de la action (useFetcher).
   useEffect(() => {
-    if (!apiEndpoint) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const data = await apiRequest<ExpenseTypeMapping[]>(apiEndpoint, {
-          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-        });
-        if (!cancelled && Array.isArray(data)) setMappings(data);
-      } catch (err) {
-        console.warn(
-          "[ExpenseTypeMappingAdmin] mappings fetch failed, using seed data",
-          err
-        );
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [apiEndpoint, token]);
+    if (fetcher.state !== "idle" || !fetcher.data) return;
+    const data = fetcher.data;
 
-  useEffect(() => {
-    if (!accountsEndpoint) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const data = await apiRequest<AccountingAccount[]>(accountsEndpoint, {
-          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-        });
-        if (!cancelled && Array.isArray(data)) setAccounts(data);
-      } catch (err) {
-        console.warn(
-          "[ExpenseTypeMappingAdmin] accounts fetch failed, using seed data",
-          err
-        );
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [accountsEndpoint, token]);
-
-  useEffect(() => {
-    if (!receiptTypesEndpoint) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const data = await apiRequest<ReceiptType[]>(receiptTypesEndpoint, {
-          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-        });
-        if (!cancelled && Array.isArray(data)) setReceiptTypes(data);
-      } catch (err) {
-        console.warn(
-          "[ExpenseTypeMappingAdmin] receipt types fetch failed, using seed data",
-          err
-        );
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [receiptTypesEndpoint, token]);
-
-  useEffect(() => {
-    if (!taxIndicatorsEndpoint) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const data = await apiRequest<TaxIndicator[]>(taxIndicatorsEndpoint, {
-          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-        });
-        if (!cancelled && Array.isArray(data)) setTaxIndicators(data);
-      } catch (err) {
-        console.warn(
-          "[ExpenseTypeMappingAdmin] tax indicators fetch failed, using seed data",
-          err
-        );
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [taxIndicatorsEndpoint, token]);
+    if (data.ok === false) {
+      setToast({ message: data.error, type: "error" });
+      return;
+    }
+    if (data.intent === "create") {
+      setMappings((prev) => [...prev, data.mapping]);
+      setToast({ message: "Mapeo creado", type: "success" });
+      setDialog({ kind: "closed" });
+    } else if (data.intent === "update") {
+      setMappings((prev) =>
+        prev.map((m) =>
+          m.expense_type_mapping_id === data.mapping.expense_type_mapping_id
+            ? data.mapping
+            : m,
+        ),
+      );
+      setToast({ message: "Mapeo actualizado", type: "success" });
+      setDialog({ kind: "closed" });
+    } else if (data.intent === "delete") {
+      setMappings((prev) =>
+        prev.filter((m) => m.expense_type_mapping_id !== data.id),
+      );
+      setToast({ message: "Mapeo eliminado", type: "success" });
+      setDialog({ kind: "closed" });
+    }
+  }, [fetcher.state, fetcher.data]);
 
   const cargoAccounts = useMemo(
     () => accounts.filter((a) => a.type === "ANTICIPOS" || a.type === "GASTOS"),
@@ -324,7 +179,6 @@ export default function ExpenseTypeMappingAdmin({
   const closeDialog = () => {
     setDialog({ kind: "closed" });
     setErrors({});
-    setSubmitting(false);
   };
 
   const validate = useCallback(
@@ -347,113 +201,43 @@ export default function ExpenseTypeMappingAdmin({
     []
   );
 
-  const handleSubmit = async () => {
+  const submitIntent = (
+    intent: "create" | "update" | "delete",
+    fields: Record<string, string>,
+  ) => {
+    fetcher.submit(
+      { _intent: intent, _csrf: csrfToken ?? "", ...fields },
+      { method: "post" },
+    );
+  };
+
+  const handleSubmit = () => {
     const nextErrors = validate(form);
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length > 0) return;
 
-    setSubmitting(true);
-    try {
-      if (dialog.kind === "create") {
-        const payload = {
-          receipt_type_id: form.receipt_type_id!,
-          cargo_account_id: form.cargo_account_id!,
-          abono_account_id: form.abono_account_id!,
-          tax_indicator_id: form.tax_indicator_id,
-        };
-        let created: ExpenseTypeMapping | null = null;
-        if (apiEndpoint) {
-          try {
-            created = await apiRequest<ExpenseTypeMapping>(apiEndpoint, {
-              method: "POST",
-              data: payload,
-              headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-            });
-          } catch (err) {
-            console.warn(
-              "[ExpenseTypeMappingAdmin] create failed, using local state",
-              err
-            );
-          }
-        }
-        const nextId =
-          created?.expense_type_mapping_id ??
-          mappings.reduce((m, x) => Math.max(m, x.expense_type_mapping_id), 0) +
-            1;
-        const orgId = created?.org_id ?? mappings[0]?.org_id ?? 1;
-        setMappings((prev) => [
-          ...prev,
-          created ?? {
-            expense_type_mapping_id: nextId,
-            org_id: orgId,
-            ...payload,
-          },
-        ]);
-        setToast({ message: "Mapeo creado", type: "success" });
-      } else if (dialog.kind === "edit") {
-        const payload = {
-          receipt_type_id: form.receipt_type_id!,
-          cargo_account_id: form.cargo_account_id!,
-          abono_account_id: form.abono_account_id!,
-          tax_indicator_id: form.tax_indicator_id,
-        };
-        if (apiEndpoint) {
-          try {
-            await apiRequest(
-              `${apiEndpoint}/${dialog.mapping.expense_type_mapping_id}`,
-              {
-                method: "PUT",
-                data: payload,
-                headers: token
-                  ? { Authorization: `Bearer ${token}` }
-                  : undefined,
-              }
-            );
-          } catch (err) {
-            console.warn(
-              "[ExpenseTypeMappingAdmin] update failed, using local state",
-              err
-            );
-          }
-        }
-        setMappings((prev) =>
-          prev.map((m) =>
-            m.expense_type_mapping_id === dialog.mapping.expense_type_mapping_id
-              ? { ...m, ...payload }
-              : m
-          )
-        );
-        setToast({ message: "Mapeo actualizado", type: "success" });
-      }
-      closeDialog();
-    } catch (err) {
-      console.error(err);
-      setToast({ message: "Error al guardar los cambios", type: "error" });
-      setSubmitting(false);
+    const fields = {
+      receipt_type_id: String(form.receipt_type_id),
+      cargo_account_id: String(form.cargo_account_id),
+      abono_account_id: String(form.abono_account_id),
+      tax_indicator_id: form.tax_indicator_id == null ? "" : String(form.tax_indicator_id),
+    };
+
+    if (dialog.kind === "create") {
+      submitIntent("create", fields);
+    } else if (dialog.kind === "edit") {
+      submitIntent("update", {
+        id: String(dialog.mapping.expense_type_mapping_id),
+        ...fields,
+      });
     }
   };
 
-  const handleDelete = async () => {
+  const handleDelete = () => {
     if (dialog.kind !== "delete") return;
-    setSubmitting(true);
-    const id = dialog.mapping.expense_type_mapping_id;
-    if (apiEndpoint) {
-      try {
-        await apiRequest(`${apiEndpoint}/${id}`, {
-          method: "PUT",
-          data: { active: false },
-          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-        });
-      } catch (err) {
-        console.warn(
-          "[ExpenseTypeMappingAdmin] delete failed, using local state",
-          err
-        );
-      }
-    }
-    setMappings((prev) => prev.filter((m) => m.expense_type_mapping_id !== id));
-    setToast({ message: "Mapeo eliminado", type: "success" });
-    closeDialog();
+    submitIntent("delete", {
+      id: String(dialog.mapping.expense_type_mapping_id),
+    });
   };
 
   const dialogOpen = dialog.kind !== "closed";

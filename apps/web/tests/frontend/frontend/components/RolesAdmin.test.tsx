@@ -2,24 +2,21 @@
  * Author: Emiliano Deyta Illescas
  *
  * Description:
- * Unit tests for RolesAdmin. Covers the initial render with seed data,
- * opening the create dialog and validating the name field, creating a
- * new role through the form, opening the edit dialog with the role
- * pre-loaded, the delete-with-warning flow for a role with active
- * users, the guard that prevents deleting the last admin role, and
- * the API integration that swaps the seed list with data from the
- * backend when apiEndpoint is provided.
+ * Unit tests for RolesAdmin. El componente ahora es prop-driven + `useFetcher`
+ * (migrado fuera de `apiRequest`): recibe `initialData` + `permissionRows` +
+ * `csrfToken` por prop y POSTea los intents create/update/delete al action de
+ * la route padre (`routes/_app/admin/roles`). Usamos `createRoutesStub` para
+ * proveer el router de RR7 y simular ese action. Cubre el render inicial,
+ * la validación del formulario, el flujo create/update/delete por fetcher,
+ * el toggle de permisos y los guards de admin/usuarios activos.
  */
 
 import { describe, it, expect } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { http, HttpResponse } from "msw";
+import { createRoutesStub } from "react-router";
 import RolesAdmin from "@components/RolesAdmin";
-import { server } from "../mocks/server";
 import type { Role } from "@type/Role";
-
-const API = "https://localhost:3000/api";
 
 const fixedRoles: Role[] = [
   {
@@ -55,21 +52,70 @@ const twoAdminRoles: Role[] = [
   },
 ];
 
+type RolesActionResult =
+  | { ok: true; intent: "create" | "update"; role: Role }
+  | { ok: true; intent: "delete"; roleId: number }
+  | { ok: false; error: string };
+
+/**
+ * Monta RolesAdmin dentro de un router stub que emula el action de
+ * `routes/_app/admin/roles`. Devuelve un getter del último FormData recibido.
+ */
+function renderRoles(initialData: Role[]) {
+  const received: { form: FormData | null } = { form: null };
+  const Stub = createRoutesStub([
+    {
+      path: "/",
+      Component: () => (
+        <RolesAdmin initialData={initialData} permissionRows={[]} csrfToken="tok-1" />
+      ),
+      action: async ({ request }) => {
+        const form = await request.formData();
+        received.form = form;
+        const intent = form.get("_intent")?.toString();
+        if (intent === "delete") {
+          return Response.json({
+            ok: true,
+            intent: "delete",
+            roleId: Number(form.get("role_id")),
+          } satisfies RolesActionResult);
+        }
+        const permissions = JSON.parse(form.get("permissions")?.toString() ?? "[]");
+        const amountRaw = form.get("max_authorization_amount")?.toString() ?? "";
+        const role: Role = {
+          role_id: intent === "update" ? Number(form.get("role_id")) : 999,
+          name: form.get("name")?.toString() ?? "",
+          permissions,
+          max_authorization_amount: amountRaw === "" ? null : Number(amountRaw),
+          expiration_date: null,
+          is_admin: form.get("is_admin")?.toString() === "true",
+          active_users_count: 0,
+        };
+        return Response.json({
+          ok: true,
+          intent: intent === "update" ? "update" : "create",
+          role,
+        } satisfies RolesActionResult);
+      },
+    },
+  ]);
+  render(<Stub initialEntries={["/"]} />);
+  return received;
+}
+
 describe("RolesAdmin", () => {
   it("renders the seed roles in the table with admin pill and counts", () => {
-    render(<RolesAdmin initialData={fixedRoles} />);
+    renderRoles(fixedRoles);
     expect(screen.getByText("Administrador")).toBeInTheDocument();
     expect(screen.getByText("Solicitante")).toBeInTheDocument();
     expect(screen.getByText("Admin")).toBeInTheDocument();
-    expect(
-      screen.getByText(/2 roles registrados/i),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/2 roles registrados/i)).toBeInTheDocument();
     expect(screen.getByText(/1 administrador/i)).toBeInTheDocument();
   });
 
   it("opens the create dialog and shows the empty form", async () => {
     const user = userEvent.setup();
-    render(<RolesAdmin initialData={fixedRoles} />);
+    renderRoles(fixedRoles);
     await user.click(screen.getByRole("button", { name: /\+ nuevo rol/i }));
     expect(
       await screen.findByRole("heading", { name: /nuevo rol/i }),
@@ -79,21 +125,19 @@ describe("RolesAdmin", () => {
 
   it("blocks submission with a name shorter than 2 characters", async () => {
     const user = userEvent.setup();
-    render(<RolesAdmin initialData={fixedRoles} />);
+    renderRoles(fixedRoles);
     await user.click(screen.getByRole("button", { name: /\+ nuevo rol/i }));
 
     const nameInput = await screen.findByPlaceholderText(/ej: autorizador regional/i);
     await user.type(nameInput, "x");
     await user.click(screen.getByRole("button", { name: /crear rol/i }));
 
-    expect(
-      await screen.findByText(/al menos 2 caracteres/i),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(/al menos 2 caracteres/i)).toBeInTheDocument();
   });
 
-  it("creates a role and shows the success toast and a new table row", async () => {
+  it("creates a role through the action and shows the success toast and a new row", async () => {
     const user = userEvent.setup();
-    render(<RolesAdmin initialData={fixedRoles} />);
+    const received = renderRoles(fixedRoles);
     await user.click(screen.getByRole("button", { name: /\+ nuevo rol/i }));
 
     await user.type(
@@ -102,16 +146,18 @@ describe("RolesAdmin", () => {
     );
     await user.click(screen.getByRole("button", { name: /crear rol/i }));
 
-    expect(
-      await screen.findByText(/rol creado correctamente/i),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(/rol creado correctamente/i)).toBeInTheDocument();
     expect(await screen.findByText("Auditor regional")).toBeInTheDocument();
     expect(screen.getByText(/3 roles registrados/i)).toBeInTheDocument();
+    await waitFor(() => expect(received.form).not.toBeNull());
+    expect(received.form!.get("_intent")).toBe("create");
+    expect(received.form!.get("_csrf")).toBe("tok-1");
+    expect(received.form!.get("name")).toBe("Auditor regional");
   });
 
   it("opens the edit dialog pre-loaded with the role's data", async () => {
     const user = userEvent.setup();
-    render(<RolesAdmin initialData={fixedRoles} />);
+    renderRoles(fixedRoles);
 
     const solicitanteRow = screen.getByText("Solicitante").closest("tr") as HTMLElement;
     await user.click(within(solicitanteRow).getByRole("button", { name: /editar/i }));
@@ -124,7 +170,7 @@ describe("RolesAdmin", () => {
 
   it("warns before deleting a role with active users and removes it on confirm", async () => {
     const user = userEvent.setup();
-    render(<RolesAdmin initialData={fixedRoles} />);
+    const received = renderRoles(fixedRoles);
 
     const solicitanteRow = screen.getByText("Solicitante").closest("tr") as HTMLElement;
     await user.click(within(solicitanteRow).getByRole("button", { name: /eliminar/i }));
@@ -132,32 +178,27 @@ describe("RolesAdmin", () => {
     expect(
       await screen.findByRole("heading", { name: /eliminar rol/i }),
     ).toBeInTheDocument();
-    expect(
-      screen.getByText(/5 usuarios activos/i),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText(/reasígnalos antes de eliminar el rol/i),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/5 usuarios activos/i)).toBeInTheDocument();
+    expect(screen.getByText(/reasígnalos antes de eliminar el rol/i)).toBeInTheDocument();
 
     const dlg = screen.getByRole("dialog");
     await user.click(within(dlg).getByRole("button", { name: /^eliminar$/i }));
 
-    expect(
-      await screen.findByText(/rol "solicitante" eliminado/i),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(/rol "solicitante" eliminado/i)).toBeInTheDocument();
     expect(screen.queryByText("Solicitante")).not.toBeInTheDocument();
+    await waitFor(() => expect(received.form).not.toBeNull());
+    expect(received.form!.get("_intent")).toBe("delete");
+    expect(received.form!.get("role_id")).toBe("2");
   });
 
   it("blocks deletion of the last admin role and disables the confirm button", async () => {
     const user = userEvent.setup();
-    render(<RolesAdmin initialData={fixedRoles} />);
+    renderRoles(fixedRoles);
 
     const adminRow = screen.getByText("Administrador").closest("tr") as HTMLElement;
     await user.click(within(adminRow).getByRole("button", { name: /eliminar/i }));
 
-    expect(
-      await screen.findByText(/último rol administrador/i),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(/último rol administrador/i)).toBeInTheDocument();
     expect(
       within(screen.getByRole("dialog")).queryByRole("button", { name: /^eliminar$/i }),
     ).not.toBeInTheDocument();
@@ -166,7 +207,7 @@ describe("RolesAdmin", () => {
 
   it("allows deleting one admin role when more than one admin exists", async () => {
     const user = userEvent.setup();
-    render(<RolesAdmin initialData={twoAdminRoles} />);
+    renderRoles(twoAdminRoles);
 
     const secondaryRow = screen
       .getByText("Admin secundario")
@@ -178,48 +219,41 @@ describe("RolesAdmin", () => {
     ).toBeInTheDocument();
   });
 
-  it("loads roles from the API endpoint when one is provided", async () => {
-    server.use(
-      http.get(`${API}/admin/roles`, () =>
-        HttpResponse.json([
-          {
-            role_id: 99,
-            name: "Rol remoto",
-            permissions: ["reportes.ver"],
-            max_authorization_amount: 1000,
-            expiration_date: null,
-            is_admin: false,
-            active_users_count: 7,
-          },
-        ]),
-      ),
-    );
-    render(<RolesAdmin apiEndpoint="/admin/roles" token="t" />);
-    expect(await screen.findByText("Rol remoto")).toBeInTheDocument();
-    await waitFor(() => {
-      expect(screen.getByText(/1 rol registrado/i)).toBeInTheDocument();
-    });
+  it("renders the empty state when no initial roles are provided", () => {
+    renderRoles([]);
+    expect(screen.getByText(/No hay roles registrados/i)).toBeInTheDocument();
   });
 
-  it("muestra aviso y tabla vacía cuando fallan roles y permisos desde el API", async () => {
-    server.use(
-      http.get(`${API}/admin/roles`, () =>
-        HttpResponse.json({ error: "x" }, { status: 500 }),
-      ),
-      http.get(`${API}/admin/permissions`, () =>
-        HttpResponse.json({ error: "x" }, { status: 500 }),
-      ),
+  it("surfaces the action error toast when the action fails", async () => {
+    const user = userEvent.setup();
+    const Stub = createRoutesStub([
+      {
+        path: "/",
+        Component: () => (
+          <RolesAdmin initialData={fixedRoles} permissionRows={[]} csrfToken="tok-1" />
+        ),
+        action: async () =>
+          Response.json(
+            { ok: false, error: "Ya existe un rol con ese nombre" } satisfies RolesActionResult,
+            { status: 409 },
+          ),
+      },
+    ]);
+    render(<Stub initialEntries={["/"]} />);
+
+    await user.click(screen.getByRole("button", { name: /\+ nuevo rol/i }));
+    await user.type(
+      await screen.findByPlaceholderText(/ej: autorizador regional/i),
+      "Duplicado",
     );
-    render(<RolesAdmin apiEndpoint="/admin/roles" />);
-    expect(
-      await screen.findByText(/no se pudieron cargar roles o permisos/i),
-    ).toBeInTheDocument();
-    expect(screen.getByText(/No hay roles registrados/i)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /crear rol/i }));
+
+    expect(await screen.findByText(/ya existe un rol con ese nombre/i)).toBeInTheDocument();
   });
 
   it("toggles a single permission on the create form", async () => {
     const user = userEvent.setup();
-    render(<RolesAdmin initialData={fixedRoles} />);
+    renderRoles(fixedRoles);
     await user.click(screen.getByRole("button", { name: /\+ nuevo rol/i }));
 
     const reportesCheckbox = await screen.findByRole("checkbox", {
@@ -234,7 +268,7 @@ describe("RolesAdmin", () => {
 
   it("selects every permission in a module with the toggle module button", async () => {
     const user = userEvent.setup();
-    render(<RolesAdmin initialData={fixedRoles} />);
+    renderRoles(fixedRoles);
     await user.click(screen.getByRole("button", { name: /\+ nuevo rol/i }));
 
     await screen.findByPlaceholderText(/ej: autorizador regional/i);
@@ -255,7 +289,7 @@ describe("RolesAdmin", () => {
 
   it("updates a role through the edit dialog and shows the actualizado toast", async () => {
     const user = userEvent.setup();
-    render(<RolesAdmin initialData={fixedRoles} />);
+    const received = renderRoles(fixedRoles);
 
     const solicitanteRow = screen.getByText("Solicitante").closest("tr") as HTMLElement;
     await user.click(within(solicitanteRow).getByRole("button", { name: /editar/i }));
@@ -267,5 +301,8 @@ describe("RolesAdmin", () => {
 
     expect(await screen.findByText(/rol actualizado/i)).toBeInTheDocument();
     expect(screen.getByText("Solicitante avanzado")).toBeInTheDocument();
+    await waitFor(() => expect(received.form).not.toBeNull());
+    expect(received.form!.get("_intent")).toBe("update");
+    expect(received.form!.get("role_id")).toBe("2");
   });
 });

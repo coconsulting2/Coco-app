@@ -10,7 +10,7 @@ export class PoliciesError extends Error {
 }
 
 export class PolicyNotFoundError extends PoliciesError {
-  constructor(message?: string) { super(message ?? "PolicyNotFoundError", "POLICYNOTFOUND"); }
+  constructor(message?: string) { super(message ?? "PolicyNotFoundError", "POLICYNOTFOUND", 404); }
 }
 
 export class PolicyViolationError extends PoliciesError {

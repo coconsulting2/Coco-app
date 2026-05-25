@@ -7,9 +7,9 @@
  */
 import { useEffect, useState } from "react";
 import { useFetcher } from "react-router";
-import Modal from "@components/Modal";
-import Toast from "@components/Toast";
-import { getButtonClasses } from "@type/button";
+import Modal from "~/shared/ui/Modal";
+import Toast from "~/shared/ui/Toast";
+import { getButtonClasses } from "~/shared/types/button";
 
 interface Props {
   request_id: number;

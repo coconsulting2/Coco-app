@@ -2,8 +2,8 @@ import { useState, useEffect, useCallback } from "react";
 import {
   NOTIFICATION_STYLES,
   NOTIFICATION_ICONS,
-} from "@config/notification";
-import type { Notification, NotificationType } from "@config/notification";
+} from "~/shared/config/notification";
+import type { Notification, NotificationType } from "~/shared/config/notification";
 
 interface Props {
   notifications: Notification[];

@@ -95,6 +95,45 @@ services:
     networks:
       - cocoscheme
 
+  # ── MinIO: almacenamiento S3-compatible para el FILE_STORE_DRIVER=s3 ──────
+  # MinIO emula la API de S3 (sirve para AWS S3 / Cloudflare R2 / MinIO). El
+  # adapter `S3FileStore` consume las vars `S3_*`. Consola web en 9001, API 9000.
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    networks:
+      - cocoscheme
+
+  # One-shot: crea el bucket S3_BUCKET en MinIO (alineado con `.env`).
+  createbuckets:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        mc alias set local http://minio:9000 minioadmin minioadmin &&
+        mc mb --ignore-existing local/coco-receipts &&
+        mc anonymous set download local/coco-receipts || true
+    networks:
+      - cocoscheme
+
   # One-shot: install deps + generate Prisma client + apply schema + seed.
   #
   # Seeding policy:
@@ -167,6 +206,14 @@ services:
       AWS_S3_ENDPOINT: http://localstack:4566
       AWS_ACCESS_KEY_ID: test
       AWS_SECRET_ACCESS_KEY: test
+      # FileStore selectable driver: `gridfs` (default) | `s3` (MinIO/R2/AWS).
+      FILE_STORE_DRIVER: gridfs
+      S3_ENDPOINT: http://minio:9000
+      S3_REGION: us-east-1
+      S3_BUCKET: coco-receipts
+      S3_ACCESS_KEY_ID: minioadmin
+      S3_SECRET_ACCESS_KEY: minioadmin
+      S3_FORCE_PATH_STYLE: "true"
       SCHEDULER_ENABLED: "true"
       FLIGHT_PROVIDER: mock
       HOTEL_PROVIDER: mock
@@ -207,6 +254,8 @@ services:
         condition: service_completed_successfully
       s3-init:
         condition: service_completed_successfully
+      createbuckets:
+        condition: service_completed_successfully
     networks:
       - cocoscheme
 
@@ -216,6 +265,7 @@ volumes:
   certs:
   node_modules_dev:
   localstack_data:
+  miniodata:
 
 networks:
   cocoscheme:

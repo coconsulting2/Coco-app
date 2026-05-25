@@ -11,6 +11,7 @@ export default [
   // ─── Public ────────────────────────────────────────────────────────────
   route("/", "routes/_public/index.tsx"),
   route("/login", "routes/_public/login.tsx"),
+  route("/logout", "routes/_public/logout.tsx"),
 
   // ─── App (auth gating en _layout) ─────────────────────────────────────
   layout("routes/_app/_layout.tsx", [

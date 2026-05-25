@@ -4,19 +4,24 @@ Fusión de `TC3005B.501-Backend` (Express + Prisma + Postgres + MongoDB GridFS +
 
 ## Estado de la migración
 
-Migración por fases. Ver `CLEANUP_PLAN.md` y `ARCHITECTURE.md` para el detalle.
+Migración por fases — **cerrada al 2026-05-25**. Ver `CLEANUP_PLAN.md` y
+`ARCHITECTURE.md` para el detalle.
 
 | Fase | Alcance | Estado |
 |---|---|---|
 | 0 | Bootstrap: estructura, configs, copia verbatim de prisma/openapi/certs/cypress/types/utils/components, platform layer (RLS, JWT, sesión, CSRF, permisos) | ✅ |
-| 1 | Slice identity: `/login`, `/dashboard`, `/perfil-usuario`, resource route `/api/user/*` para LoginForm legacy | 🟡 en progreso (login + dashboard + perfil ✓; crear-usuario / editar-usuario pendientes) |
-| 2 | Slices read-only: fx, flights, hotels, notifications (read), policies (read), refunds (read), organizations (read), api-keys (read) | ⏳ |
-| 3 | Núcleo: travel-requests + approvals + workflow (crear/editar/cancelar solicitud, autorizaciones, comentarios) | ⏳ |
-| 4 | Receipts/CFDI + travel-agency + accounts-payable (upload GridFS, SAT SOAP, Duffel, exportación contable) | ⏳ |
-| 5 | Admin slices: policies, refunds, onboarding, workflow-rules, organizations write | ⏳ |
-| 6 | Hardening: eliminar cookies legacy, lint estricto, auditoría seguridad, runbook | ⏳ |
+| 1 | Slice identity: `/login`, `/dashboard`, `/perfil-usuario`, crear/editar usuario | ✅ |
+| 2 | Slices read-only: fx, flights, hotels, notifications, policies, refunds, organizations, api-keys | ✅ |
+| 3 | Núcleo: travel-requests + approvals + workflow (crear/editar/cancelar solicitud, autorizaciones, comentarios) | ✅ |
+| 4 | Receipts/CFDI + travel-agency + accounts-payable (upload GridFS, SAT SOAP, Duffel, exportación contable) | ✅ |
+| 5 | Admin slices: policies, refunds, onboarding, workflow-rules, organizations write | ✅ |
+| 6 | Hardening: slices 100% hexagonal en TS, `@ts-nocheck`/`@ts-ignore` a 0 fuera de tests, imports alias legacy migrados a `~/shared/...` | ✅ |
 
-Durante 1-5, el backend legacy en `:3000` queda corriendo como red de seguridad para endpoints aún no migrados. Cero pérdida de funcionalidad.
+Todos los slices `app/contexts/**` son 100% hexagonal en TypeScript (0 `.js`).
+Los únicos `.js` restantes son platform boundaries en `app/platform/**`
+(declarados tipados en `app/types/legacy-js.d.ts`). Routes y `shared/ui` no
+hacen `apiRequest`/`fetch('/api/...')` salvo un residual conocido
+(`ExpensesDashboard.tsx`).
 
 ## Arquitectura
 

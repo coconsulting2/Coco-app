@@ -1,4 +1,3 @@
-// @ts-nocheck — bulk-converted legacy; typed properly is M9 follow-up
 /**
  * @module employeeHierarchyService
  * @description Utilidades de jerarquía organizacional (adjacency list)
@@ -8,25 +7,29 @@
 import EmployeeModel from "~/contexts/onboarding/infrastructure/employeeModel.js";
 
 const Authorizer = {
-  getManagerUserId: (userId) => EmployeeModel.getManagerUserId(userId),
+  getManagerUserId: (userId: number): Promise<number | null> =>
+    EmployeeModel.getManagerUserId(userId),
+  getDirectSubordinates: (userId: number): Promise<number[]> =>
+    EmployeeModel.getDirectSubordinates(userId),
 };
+
+/** Error de jerarquía con status HTTP (parity con el legacy). */
+type HierarchyError = { status: number; message: string };
 
 /**
  * Cadena de aprobación hacia arriba (jefe directo, jefe del jefe, ...).
- * @param {number} userId
- * @param {number} [maxDepth=8]
- * @returns {Promise<number[]>}
  */
-export async function getApprovalChain(userId, maxDepth = 8) {
-  const chain = [];
-  const seen = new Set([Number(userId)]);
+export async function getApprovalChain(userId: number, maxDepth = 8): Promise<number[]> {
+  const chain: number[] = [];
+  const seen = new Set<number>([Number(userId)]);
   let current = Number(userId);
 
   for (let depth = 0; depth < maxDepth; depth += 1) {
     const managerId = await Authorizer.getManagerUserId(current);
     if (managerId == null) break;
     if (seen.has(Number(managerId))) {
-      throw { status: 409, message: "Cycle detected in manager hierarchy" };
+      const err: HierarchyError = { status: 409, message: "Cycle detected in manager hierarchy" };
+      throw err;
     }
     chain.push(Number(managerId));
     seen.add(Number(managerId));
@@ -38,17 +41,17 @@ export async function getApprovalChain(userId, maxDepth = 8) {
 
 /**
  * Subordinados transitivos (BFS) de un manager.
- * @param {number} managerUserId
- * @param {number} [maxNodes=2000]
- * @returns {Promise<number[]>}
  */
-export async function getSubordinatesRecursive(managerUserId, maxNodes = 2000) {
-  const visited = new Set();
-  const out = [];
-  const queue = [Number(managerUserId)];
+export async function getSubordinatesRecursive(
+  managerUserId: number,
+  maxNodes = 2000,
+): Promise<number[]> {
+  const visited = new Set<number>();
+  const out: number[] = [];
+  const queue: number[] = [Number(managerUserId)];
 
   while (queue.length > 0 && out.length < maxNodes) {
-    const current = queue.shift();
+    const current = queue.shift() as number;
     if (visited.has(current)) continue;
     visited.add(current);
 
@@ -66,11 +69,8 @@ export async function getSubordinatesRecursive(managerUserId, maxNodes = 2000) {
 
 /**
  * Profundidad de aprobación disponible para un usuario.
- * @param {number} userId
- * @param {number} [maxDepth=8]
- * @returns {Promise<number>}
  */
-export async function getHierarchyDepth(userId, maxDepth = 8) {
+export async function getHierarchyDepth(userId: number, maxDepth = 8): Promise<number> {
   const chain = await getApprovalChain(userId, maxDepth);
   return chain.length;
 }
@@ -78,13 +78,12 @@ export async function getHierarchyDepth(userId, maxDepth = 8) {
 /**
  * Indica si asignar `proposedManagerUserId` como `User.managerUserId` de `userId` crearía un ciclo
  * en la jerarquía actual (adjacency list). `null` / `undefined` en el jefe propuesto nunca crea ciclo.
- *
- * @param {number} userId
- * @param {number|null|undefined} proposedManagerUserId
- * @param {number} [maxDepth=32]
- * @returns {Promise<boolean>}
  */
-export async function wouldCreateManagerCycle(userId, proposedManagerUserId, maxDepth = 32) {
+export async function wouldCreateManagerCycle(
+  userId: number,
+  proposedManagerUserId: number | null | undefined,
+  maxDepth = 32,
+): Promise<boolean> {
   const u = Number(userId);
   if (!Number.isFinite(u) || u < 1) return false;
   if (proposedManagerUserId === undefined || proposedManagerUserId === null) {
@@ -94,7 +93,7 @@ export async function wouldCreateManagerCycle(userId, proposedManagerUserId, max
   if (!Number.isFinite(m) || m < 1) return false;
   if (m === u) return true;
 
-  const seen = new Set([m]);
+  const seen = new Set<number>([m]);
   let current = m;
   for (let depth = 0; depth < maxDepth; depth += 1) {
     const next = await Authorizer.getManagerUserId(current);

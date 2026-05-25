@@ -1,16 +1,13 @@
-// @ts-nocheck — bulk-converted legacy; typed properly is M9 follow-up
 /**
  * @module employeeModel
- * @description Data access layer for empleado catalog sync.
+ * @description Data access layer for empleado catalog sync + manager hierarchy.
+ * Prisma vive solo aquí.
  */
 import prisma from "~/platform/db/prisma.server.js";
+import type { Prisma } from "@coco/db";
 
 const EmployeeModel = {
-  /**
-   * @param {bigint|number|string} organizationId
-   * @param {string} noEmpleado
-   */
-  async findByNoEmpleado(organizationId, noEmpleado) {
+  async findByNoEmpleado(organizationId: bigint | number | string, noEmpleado: string) {
     return prisma.empleado.findUnique({
       where: {
         organizationId_noEmpleado: {
@@ -21,19 +18,15 @@ const EmployeeModel = {
     });
   },
 
-  /**
-   * @param {object} data
-   */
-  async createEmpleado(data) {
+  async createEmpleado(data: Prisma.EmpleadoUncheckedCreateInput) {
     return prisma.empleado.create({ data });
   },
 
-  /**
-   * @param {bigint|number|string} organizationId
-   * @param {string} noEmpleado
-   * @param {object} data
-   */
-  async updateEmpleado(organizationId, noEmpleado, data) {
+  async updateEmpleado(
+    organizationId: bigint | number | string,
+    noEmpleado: string,
+    data: Prisma.EmpleadoUncheckedUpdateInput,
+  ) {
     return prisma.empleado.update({
       where: {
         organizationId_noEmpleado: {
@@ -45,27 +38,32 @@ const EmployeeModel = {
     });
   },
 
-  /**
-   * Lista empleados por organización.
-   * @param {bigint|number|string} organizationId
-   * @param {{ status?: string|null }} [filters]
-   */
-  async listByOrganization(organizationId, { status = null } = {}) {
-    const where = { organizationId: BigInt(organizationId) };
+  /** Lista empleados por organización. */
+  async listByOrganization(
+    organizationId: bigint | number | string,
+    { status = null }: { status?: string | null } = {},
+  ) {
+    const where: Prisma.EmpleadoWhereInput = { organizationId: BigInt(organizationId) };
     if (status) where.status = String(status).toUpperCase();
-    return prisma.empleado.findMany({
-      where,
-      orderBy: { noEmpleado: "asc" },
-    });
+    return prisma.empleado.findMany({ where, orderBy: { noEmpleado: "asc" } });
   },
 
   /** Lookup directo del managerUserId — soporta el helper de jerarquía. */
-  async getManagerUserId(userId) {
+  async getManagerUserId(userId: number): Promise<number | null> {
     const row = await prisma.user.findUnique({
       where: { userId: Number(userId) },
       select: { managerUserId: true },
     });
     return row?.managerUserId ?? null;
+  },
+
+  /** Subordinados directos (userIds cuyo managerUserId == userId). */
+  async getDirectSubordinates(managerUserId: number): Promise<number[]> {
+    const rows = await prisma.user.findMany({
+      where: { managerUserId: Number(managerUserId) },
+      select: { userId: true },
+    });
+    return rows.map((r) => r.userId);
   },
 };
 

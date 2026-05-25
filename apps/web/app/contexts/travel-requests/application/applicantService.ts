@@ -5,7 +5,6 @@
  * country/city.
  */
 import Applicant from "~/contexts/travel-requests/infrastructure/applicantModel.js";
-// @ts-ignore — receipts-cfdi sigue en .js parcial (ver legacy-js.d.ts)
 import { findByCfdiUuid } from "~/contexts/receipts-cfdi/application/cfdiQueryService.js";
 
 export type RouteInput = {

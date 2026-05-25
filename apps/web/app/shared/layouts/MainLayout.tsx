@@ -11,7 +11,7 @@ import { type ReactNode } from "react";
 
 import Sidebar from "./Sidebar";
 import PageHeader from "./PageHeader";
-import type { UserRole } from "@type/roles";
+import type { UserRole } from "~/shared/types/roles";
 
 type Props = {
   userName: string;

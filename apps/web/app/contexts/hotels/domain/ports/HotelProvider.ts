@@ -1,10 +1,19 @@
 /**
  * @module HotelProvider
- * @description Puerto del slice. Los adapters concretos viven en
- * `infrastructure/`. Los métodos están tipados como `unknown[]` por ahora —
- * tipar fuertemente queda como hardening de Fase 6.
+ * @description Puerto del slice hotels. Un adapter concreto busca ofertas de
+ * hospedaje (Duffel Stays o mock). Los adapters viven en `infrastructure/`.
  */
+import type { StaySearchInputApp } from "@coco/integrations/duffel";
+import type { HotelSearchOffer } from "~/contexts/hotels/domain/entities/HotelQuote.js";
+
+export type { StaySearchInputApp, HotelSearchOffer };
+
+/** Etiqueta del proveedor activo (para el contrato de respuesta). */
+export type HotelProviderLabel = "duffel" | "mock" | "mock_fallback";
+
 export interface HotelProvider {
-  search(...args: unknown[]): Promise<unknown>;
-  quote(...args: unknown[]): Promise<unknown>;
+  /** Busca ofertas normalizadas de hospedaje. */
+  searchOffers(params: StaySearchInputApp): Promise<HotelSearchOffer[]>;
+  /** Etiqueta del último proveedor efectivamente usado. */
+  readonly lastProviderUsed: HotelProviderLabel;
 }

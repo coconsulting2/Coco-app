@@ -1,12 +1,20 @@
-// @ts-nocheck — bulk-converted legacy; typed properly is M9 follow-up
 /**
  * @module permissionCatalog
  * @description Catálogo global de permisos agrupado por recurso (para UI de importación).
  */
-import * as permissionModel from "~/contexts/identity/infrastructure/permissionModel.js";
+import { listPermissions } from "~/contexts/identity/infrastructure/permissionModel.js";
+import type { PermissionsCatalog } from "~/contexts/onboarding/domain/entities/ImportUser";
+
+/** Fila cruda del catálogo de permisos (subset consumido aquí). */
+type PermissionRow = {
+  code: string;
+  resource: string;
+  action: string;
+  description: string | null;
+};
 
 /** Etiquetas legibles por recurso (fallback: capitalizar). */
-const RESOURCE_LABELS_ES = {
+const RESOURCE_LABELS_ES: Record<string, string> = {
   user: "Usuarios",
   role: "Roles y permisos",
   permission: "Catálogo de permisos",
@@ -30,29 +38,18 @@ const RESOURCE_LABELS_ES = {
   travel_agent: "Agencia de viajes",
 };
 
-/**
- *
- * @param resource
- */
-function formatResourceFallback(resource) {
+function formatResourceFallback(resource: string): string {
   return String(resource || "")
     .replace(/_/g, " ")
     .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-/**
- * @returns {Promise<{ groups: Array<{ resource: string, label: string, items: Array<{ code: string, action: string, description: string | null }> }> }>}
- */
-export async function buildPermissionsCatalogGrouped() {
-  const perms = await permissionModel.listPermissions({ activeOnly: true });
-  const byResource = new Map();
+export async function buildPermissionsCatalogGrouped(): Promise<PermissionsCatalog> {
+  const perms: PermissionRow[] = await listPermissions({ activeOnly: true });
+  const byResource = new Map<string, Array<{ code: string; action: string; description: string | null }>>();
   for (const p of perms) {
     const list = byResource.get(p.resource) ?? [];
-    list.push({
-      code: p.code,
-      action: p.action,
-      description: p.description,
-    });
+    list.push({ code: p.code, action: p.action, description: p.description });
     byResource.set(p.resource, list);
   }
 

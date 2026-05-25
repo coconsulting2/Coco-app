@@ -1,26 +1,70 @@
-// @ts-nocheck — dispatcher legacy bound to pre-hex services; M9 follow-up
 /**
  * @module policiesApi.server
- * @description Dispatcher /api/policies/* — preservado para compatibilidad
- * con componentes legacy que lo consumen vía apiClient + contrato OpenAPI.
- * Para flujos in-app nuevos, prefiere actions/loaders directos (DI).
+ * @description Dispatcher /api/policies/* — preservado para compatibilidad con
+ * el contrato OpenAPI. Para flujos in-app nuevos, prefiere actions/loaders
+ * directos (DI) — ver routes/_app/admin/expense-policies.tsx.
  */
 import { jsonOk, jsonError, jsonFromError } from "~/platform/http/responses";
-import { requirePermissions, runInTenant } from "~/platform/session/requireUser.server";
+import {
+  requirePermissions,
+  runInTenant,
+  type ResolvedSession,
+} from "~/platform/session/requireUser.server";
 import { assertCsrf } from "~/platform/csrf/csrf.server";
-
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore — JS module
-import * as policyService from "~/contexts/policies/application/policyService.js";
+import {
+  listPolicies,
+  getPolicy,
+  createPolicy,
+  updatePolicy,
+  deactivatePolicy,
+} from "~/contexts/policies/application/policyService.js";
+import {
+  checkReceiptBeforeSubmit,
+  type CheckReceiptInput,
+} from "~/contexts/policies/application/policyAlertService.js";
+import type { PolicyPayload } from "~/contexts/policies/domain/types";
 
 type DispatchArgs = { request: Request; subpath: string };
+type DispatchCtx = { session: ResolvedSession; body: Record<string, unknown> | null };
+type Handler = (m: RegExpMatchArray, ctx: DispatchCtx) => Promise<unknown>;
 
-const ROUTES: Array<{ method: string; pattern: RegExp; handler: (m: RegExpMatchArray, ctx: any) => Promise<unknown> }> = [
-  { method: "GET", pattern: /^$/, handler: async (m, { session, body }) => policyService.listPolicies() },
-  { method: "GET", pattern: /^(\d+)$/, handler: async (m, { session, body }) => policyService.getPolicy(Number(m[1])) },
-  { method: "POST", pattern: /^$/, handler: async (m, { session, body }) => policyService.createPolicy(body) },
-  { method: "PUT", pattern: /^(\d+)$/, handler: async (m, { session, body }) => policyService.updatePolicy(Number(m[1]), body) },
-  { method: "POST", pattern: /^preview$/, handler: async (m, { session, body }) => policyService.previewReceipt(body) },
+const ROUTES: Array<{ method: string; pattern: RegExp; handler: Handler }> = [
+  {
+    method: "GET",
+    pattern: /^$/,
+    handler: async (_m, { session }) => ({
+      policies: await listPolicies(session.organizationId),
+    }),
+  },
+  {
+    method: "GET",
+    pattern: /^(\d+)$/,
+    handler: async (m, { session }) => getPolicy(Number(m[1]), session.organizationId),
+  },
+  {
+    method: "POST",
+    pattern: /^$/,
+    handler: async (_m, { session, body }) =>
+      createPolicy(session.organizationId, (body ?? {}) as PolicyPayload),
+  },
+  {
+    method: "PUT",
+    pattern: /^(\d+)$/,
+    handler: async (m, { session, body }) =>
+      updatePolicy(Number(m[1]), session.organizationId, (body ?? {}) as PolicyPayload),
+  },
+  {
+    method: "DELETE",
+    pattern: /^(\d+)$/,
+    handler: async (m, { session }) =>
+      deactivatePolicy(Number(m[1]), session.organizationId),
+  },
+  {
+    method: "POST",
+    pattern: /^preview$/,
+    handler: async (_m, { body }) =>
+      checkReceiptBeforeSubmit((body ?? {}) as unknown as CheckReceiptInput),
+  },
 ];
 
 export async function dispatchPoliciesApi({ request, subpath }: DispatchArgs): Promise<Response> {
@@ -36,10 +80,8 @@ export async function dispatchPoliciesApi({ request, subpath }: DispatchArgs): P
       if (method !== "GET" && method !== "HEAD") {
         await assertCsrf(request);
       }
-      const body = (method !== "GET" && method !== "HEAD") ? await readJson(request) : null;
-      const result = await runInTenant(session, async () =>
-        r.handler(m, { session, body }),
-      );
+      const body = method !== "GET" && method !== "HEAD" ? await readJson(request) : null;
+      const result = await runInTenant(session, async () => r.handler(m, { session, body }));
       return jsonOk(result ?? { ok: true });
     }
     return jsonError(404, `Unknown policies endpoint: ${method} ${path}`, "UNKNOWN_ENDPOINT");
@@ -48,11 +90,11 @@ export async function dispatchPoliciesApi({ request, subpath }: DispatchArgs): P
   }
 }
 
-async function readJson(request: Request): Promise<any | null> {
+async function readJson(request: Request): Promise<Record<string, unknown> | null> {
   try {
     const text = await request.text();
     if (!text) return null;
-    return JSON.parse(text);
+    return JSON.parse(text) as Record<string, unknown>;
   } catch {
     return null;
   }

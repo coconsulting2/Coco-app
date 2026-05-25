@@ -181,16 +181,21 @@ contexts/identity/
 │   ├── ports/PiiCipher.ts
 │   ├── ports/SessionTokenSigner.ts
 │   └── errors.ts                     # InvalidCredentialsError, etc.
-├── application/
-│   ├── adminAccountsService.ts       # ← convertido a .ts (referencia)
-│   ├── lookupsService.ts             # ← convertido a .ts (referencia)
-│   ├── userService.js                # legacy — pendiente .js → .ts
-│   └── adminService.js               # legacy — pendiente .js → .ts
-├── infrastructure/
-│   ├── lookupsModel.ts               # ← convertido a .ts (referencia)
-│   ├── userModel.js                  # legacy — pendiente
-│   ├── adminModel.js                 # legacy — pendiente
-│   └── permissionModel.js            # legacy — pendiente
+├── application/                      # use-cases (100% .ts)
+│   ├── authenticateUser.ts
+│   ├── getUserProfile.ts
+│   ├── listAdminRolesCatalog.ts
+│   ├── listLookups.ts
+│   ├── manageTenantRoles.ts
+│   └── manageUsers.ts
+├── infrastructure/                   # adapters Prisma/platform (100% .ts)
+│   ├── BcryptPasswordHasher.ts
+│   ├── JwtSessionTokenSigner.ts
+│   ├── LegacyPermissionServiceAdapter.ts
+│   ├── PlatformPiiCipher.ts
+│   ├── PrismaLookupsRepository.ts
+│   ├── PrismaUserRepository.ts
+│   └── permissionModel.ts            # data-access permisos (tipado proper)
 └── interface/
     └── api/{userApi,adminApi,permissionApi}.server.ts
 ```

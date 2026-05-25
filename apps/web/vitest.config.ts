@@ -17,6 +17,9 @@ export default defineConfig({
   resolve: {
     alias: {
       "~": resolve(__dirname, "app"),
+      "@coco/ui-kit": resolve(__dirname, "../../packages/ui-kit/src"),
+      "@": resolve(__dirname, "app/shared"),
+      "@tests": resolve(__dirname, "tests"),
       "@components": resolve(__dirname, "app/shared/ui"),
       "@utils": resolve(__dirname, "app/shared/utils"),
       "@config": resolve(__dirname, "app/shared/config"),
@@ -31,6 +34,11 @@ export default defineConfig({
   test: {
     globals: true,
     environment: "jsdom",
+    // Los component tests legacy que aún consumen `fetch(PUBLIC_API_BASE_URL/...)`
+    // (p.ej. ResumenTramos) esperan que la base apunte al host mockeado por MSW.
+    env: {
+      PUBLIC_API_BASE_URL: "https://localhost:3000/api",
+    },
     setupFiles: ["./tests/frontend/setup.ts"],
     include: [
       "tests/**/*.{test,spec}.{js,ts,tsx}",
@@ -42,6 +50,9 @@ export default defineConfig({
       "cypress/**",
       // E2E tests need real DB + HTTPS server. Run separately.
       "**/*.e2e.test.*",
+      // Legacy TC3005B backend tests are Jest (@jest/globals) + need a live DB;
+      // they are not wired for this Vitest runner. Migrate or remove separately.
+      "tests/backend/**",
     ],
     coverage: {
       provider: "v8",

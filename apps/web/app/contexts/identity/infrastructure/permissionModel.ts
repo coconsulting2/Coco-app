@@ -1,11 +1,14 @@
-// @ts-nocheck — legacy permission catalog; bulk-converted (typed properly is M9)
 /**
  * @module permissionModel
  * @description Data-access layer for the granular permission system.
  * All Prisma queries live here so services stay free of ORM specifics.
  */
-import prisma from "~/platform/db/prisma.server.js";
-import { getTenantContext } from "~/platform/db/tenant-context.server.js";
+import { Prisma } from "@coco/db";
+import prisma from "~/platform/db/prisma.server";
+import { getTenantContext } from "~/platform/db/tenant-context.server";
+
+/** Cliente Prisma extendido (web) o el handle transaccional interactivo. */
+type PrismaLike = typeof prisma | Parameters<Parameters<typeof prisma.$transaction>[0]>[0];
 
 const USER_WITH_PERMISSIONS_INCLUDE = {
   organization: {
@@ -52,8 +55,8 @@ const USER_WITH_PERMISSIONS_INCLUDE = {
  * @param {number} userId - Target user id
  * @returns {Promise<Object|null>} Nested user record or null
  */
-export async function findUserWithPermissions(userId) {
-  const q = (client) =>
+export async function findUserWithPermissions(userId: number) {
+  const q = (client: PrismaLike) =>
     client.user.findUnique({
       where: { userId },
       include: USER_WITH_PERMISSIONS_INCLUDE,
@@ -93,8 +96,8 @@ const ROLE_WITH_PERMISSIONS_INCLUDE = {
  * @param {number} roleId - Rol destino
  * @returns {Promise<Object|null>} Rol anidado o null
  */
-export async function findRoleWithPermissions(roleId) {
-  const q = (client) =>
+export async function findRoleWithPermissions(roleId: number) {
+  const q = (client: PrismaLike) =>
     client.role.findUnique({
       where: { roleId },
       include: ROLE_WITH_PERMISSIONS_INCLUDE,
@@ -117,7 +120,7 @@ export async function findRoleWithPermissions(roleId) {
  * @param {boolean} [options.activeOnly=false] - If true, returns only active permissions
  * @returns {Promise<Array>} Array of Permission rows
  */
-export const listPermissions = ({ activeOnly = false } = {}) =>
+export const listPermissions = ({ activeOnly = false }: { activeOnly?: boolean } = {}) =>
   prisma.permission.findMany({
     where: activeOnly ? { active: true } : undefined,
     orderBy: [{ resource: "asc" }, { action: "asc" }],
@@ -129,7 +132,7 @@ export const listPermissions = ({ activeOnly = false } = {}) =>
  * @param {string} code - Permission code (e.g. "travel_request:approve")
  * @returns {Promise<Object|null>} Permission row or null
  */
-export const findPermissionByCode = (code) =>
+export const findPermissionByCode = (code: string) =>
   prisma.permission.findUnique({ where: { code } });
 
 /**
@@ -138,7 +141,7 @@ export const findPermissionByCode = (code) =>
  * @param {Object} data - { code, resource, action, description? }
  * @returns {Promise<Object>} Created Permission row
  */
-export const createPermission = (data) =>
+export const createPermission = (data: { code: string; resource: string; action: string; description?: string }) =>
   prisma.permission.create({ data });
 
 /**
@@ -148,7 +151,7 @@ export const createPermission = (data) =>
  * @param {Object} data - Partial update
  * @returns {Promise<Object>} Updated Permission row
  */
-export const updatePermission = (permissionId, data) =>
+export const updatePermission = (permissionId: number, data: Record<string, unknown>) =>
   prisma.permission.update({ where: { permissionId }, data });
 
 /**
@@ -157,7 +160,7 @@ export const updatePermission = (permissionId, data) =>
  * @param {number} permissionId - Target permission id
  * @returns {Promise<Object>} Updated Permission row
  */
-export const deactivatePermission = (permissionId) =>
+export const deactivatePermission = (permissionId: number) =>
   prisma.permission.update({ where: { permissionId }, data: { active: false } });
 
 /**
@@ -177,7 +180,7 @@ export const listPermissionGroups = () =>
  * @param {number} groupId - Target group id
  * @returns {Promise<Object|null>} Group row with items or null
  */
-export const findPermissionGroup = (groupId) =>
+export const findPermissionGroup = (groupId: number) =>
   prisma.permissionGroup.findUnique({
     where: { groupId },
     include: { items: { include: { permission: true } } },
@@ -189,8 +192,11 @@ export const findPermissionGroup = (groupId) =>
  * @param {Object} data - { groupName, description? }
  * @returns {Promise<Object>} Created group
  */
-export const createPermissionGroup = (data) =>
-  prisma.permissionGroup.create({ data });
+export const createPermissionGroup = (data: { groupName: string; description?: string }) =>
+  // `organizationId` lo inyecta el tenantExtension en runtime sobre cada `create`.
+  prisma.permissionGroup.create({
+    data: data as Prisma.PermissionGroupCreateInput,
+  });
 
 /**
  * Updates a permission group.
@@ -199,7 +205,7 @@ export const createPermissionGroup = (data) =>
  * @param {Object} data - Partial update
  * @returns {Promise<Object>} Updated group
  */
-export const updatePermissionGroup = (groupId, data) =>
+export const updatePermissionGroup = (groupId: number, data: Record<string, unknown>) =>
   prisma.permissionGroup.update({ where: { groupId }, data });
 
 /**
@@ -208,7 +214,7 @@ export const updatePermissionGroup = (groupId, data) =>
  * @param {number} groupId - Target group id
  * @returns {Promise<Object>} Updated group
  */
-export const deactivatePermissionGroup = (groupId) =>
+export const deactivatePermissionGroup = (groupId: number) =>
   prisma.permissionGroup.update({ where: { groupId }, data: { active: false } });
 
 /**
@@ -218,9 +224,9 @@ export const deactivatePermissionGroup = (groupId) =>
  * @param {number[]} permissionIds - Ids of permissions to add
  * @returns {Promise<Object>} createMany result
  */
-export const addPermissionsToGroup = (groupId, permissionIds) =>
+export const addPermissionsToGroup = (groupId: number, permissionIds: number[]) =>
   prisma.permissionGroupItem.createMany({
-    data: permissionIds.map((permissionId) => ({ groupId, permissionId })),
+    data: permissionIds.map((permissionId: number) => ({ groupId, permissionId })),
     skipDuplicates: true,
   });
 
@@ -231,7 +237,7 @@ export const addPermissionsToGroup = (groupId, permissionIds) =>
  * @param {number} permissionId - Permission id to remove
  * @returns {Promise<Object>} Deleted item
  */
-export const removePermissionFromGroup = (groupId, permissionId) =>
+export const removePermissionFromGroup = (groupId: number, permissionId: number) =>
   prisma.permissionGroupItem.delete({
     where: { groupId_permissionId: { groupId, permissionId } },
   });
@@ -243,9 +249,9 @@ export const removePermissionFromGroup = (groupId, permissionId) =>
  * @param {number[]} permissionIds - Ids of permissions to add
  * @returns {Promise<Object>} createMany result
  */
-export const addPermissionsToRole = (roleId, permissionIds) =>
+export const addPermissionsToRole = (roleId: number, permissionIds: number[]) =>
   prisma.rolePermission.createMany({
-    data: permissionIds.map((permissionId) => ({ roleId, permissionId })),
+    data: permissionIds.map((permissionId: number) => ({ roleId, permissionId })),
     skipDuplicates: true,
   });
 
@@ -256,7 +262,7 @@ export const addPermissionsToRole = (roleId, permissionIds) =>
  * @param {number} permissionId - Permission id to remove
  * @returns {Promise<Object>} Deleted row
  */
-export const removePermissionFromRole = (roleId, permissionId) =>
+export const removePermissionFromRole = (roleId: number, permissionId: number) =>
   prisma.rolePermission.delete({
     where: { roleId_permissionId: { roleId, permissionId } },
   });
@@ -268,9 +274,9 @@ export const removePermissionFromRole = (roleId, permissionId) =>
  * @param {number[]} groupIds - Ids of groups to add
  * @returns {Promise<Object>} createMany result
  */
-export const addGroupsToRole = (roleId, groupIds) =>
+export const addGroupsToRole = (roleId: number, groupIds: number[]) =>
   prisma.rolePermissionGroup.createMany({
-    data: groupIds.map((groupId) => ({ roleId, groupId })),
+    data: groupIds.map((groupId: number) => ({ roleId, groupId })),
     skipDuplicates: true,
   });
 
@@ -281,7 +287,7 @@ export const addGroupsToRole = (roleId, groupIds) =>
  * @param {number} groupId - Group id to remove
  * @returns {Promise<Object>} Deleted row
  */
-export const removeGroupFromRole = (roleId, groupId) =>
+export const removeGroupFromRole = (roleId: number, groupId: number) =>
   prisma.rolePermissionGroup.delete({
     where: { roleId_groupId: { roleId, groupId } },
   });
@@ -293,9 +299,13 @@ export const removeGroupFromRole = (roleId, groupId) =>
  * @param {number[]} permissionIds - Ids of permissions to add
  * @returns {Promise<Object>} createMany result
  */
-export const addPermissionsToUser = (userId, permissionIds) =>
+export const addPermissionsToUser = (userId: number, permissionIds: number[]) =>
+  // `organizationId` lo inyecta el tenantExtension en runtime sobre cada `createMany`.
   prisma.userPermission.createMany({
-    data: permissionIds.map((permissionId) => ({ userId, permissionId })),
+    data: permissionIds.map(
+      (permissionId: number) =>
+        ({ userId, permissionId }) as Prisma.UserPermissionCreateManyInput,
+    ),
     skipDuplicates: true,
   });
 
@@ -306,7 +316,7 @@ export const addPermissionsToUser = (userId, permissionIds) =>
  * @param {number} permissionId - Permission id
  * @returns {Promise<Object>} Deleted row
  */
-export const removePermissionFromUser = (userId, permissionId) =>
+export const removePermissionFromUser = (userId: number, permissionId: number) =>
   prisma.userPermission.delete({
     where: { userId_permissionId: { userId, permissionId } },
   });
@@ -318,9 +328,13 @@ export const removePermissionFromUser = (userId, permissionId) =>
  * @param {number[]} groupIds - Group ids
  * @returns {Promise<Object>} createMany result
  */
-export const addGroupsToUser = (userId, groupIds) =>
+export const addGroupsToUser = (userId: number, groupIds: number[]) =>
+  // `organizationId` lo inyecta el tenantExtension en runtime sobre cada `createMany`.
   prisma.userPermissionGroup.createMany({
-    data: groupIds.map((groupId) => ({ userId, groupId })),
+    data: groupIds.map(
+      (groupId: number) =>
+        ({ userId, groupId }) as Prisma.UserPermissionGroupCreateManyInput,
+    ),
     skipDuplicates: true,
   });
 
@@ -331,7 +345,7 @@ export const addGroupsToUser = (userId, groupIds) =>
  * @param {number} groupId - Group id
  * @returns {Promise<Object>} Deleted row
  */
-export const removeGroupFromUser = (userId, groupId) =>
+export const removeGroupFromUser = (userId: number, groupId: number) =>
   prisma.userPermissionGroup.delete({
     where: { userId_groupId: { userId, groupId } },
   });

@@ -1,18 +1,52 @@
-// @ts-nocheck — bulk-converted legacy; typed properly is M9 follow-up
 /**
  * @module policyAlertQueries
- * @description Queries Prisma usadas por policyAlertService.
+ * @description Adapter Prisma del puerto PolicyAlertQueriesPort. Queries usadas
+ * por policyAlertService para la pre-evaluación de receipts (RF-44).
  */
 import prisma from "~/platform/db/prisma.server.js";
+import type { TravelPolicyRow } from "~/contexts/policies/domain/types";
 
-/**
- * Lookup completo de Request con joins necesarios para evaluación de política
- * pre-envío (snapshot + user.organizationId + routes con countries).
- *
- * @param {number} requestId
- * @returns {Promise<object | null>}
- */
-export async function findRequestForPolicyPreview(requestId) {
+export interface RouteRequestRow {
+  route: {
+    idOriginCountry: number | null;
+    idDestinationCountry: number | null;
+  } | null;
+}
+
+export interface RequestForPolicyPreview {
+  requestId: number;
+  policyEvaluationSnapshot: PolicyEvaluationSnapshot | null;
+  user: { organizationId: bigint | number } | null;
+  routeRequests: RouteRequestRow[];
+}
+
+export interface PolicyEvaluationSnapshot {
+  policyId?: number;
+  name?: string;
+  categoryId?: number | null;
+  destinationScope?: string;
+  costsCenter?: string | null;
+  dailyPerDiem?: number | null;
+  currency?: string;
+  validFrom?: string;
+  validTo?: string | null;
+  caps?: Array<{
+    capId: number;
+    receiptTypeId: number;
+    capAmount: number;
+    capUnit: string;
+    currency: string;
+  }>;
+}
+
+export interface PolicyAlertQueriesPort {
+  findRequestForPolicyPreview(requestId: number): Promise<RequestForPolicyPreview | null>;
+  listActivePoliciesForOrg(organizationId: bigint | number): Promise<TravelPolicyRow[]>;
+}
+
+export async function findRequestForPolicyPreview(
+  requestId: number,
+): Promise<RequestForPolicyPreview | null> {
   return prisma.request.findUnique({
     where: { requestId: Number(requestId) },
     select: {
@@ -21,18 +55,20 @@ export async function findRequestForPolicyPreview(requestId) {
       user: { select: { organizationId: true } },
       routeRequests: { include: { route: true } },
     },
-  });
+  }) as unknown as Promise<RequestForPolicyPreview | null>;
 }
 
-/**
- * Lista las políticas activas de una organización con sus topes.
- *
- * @param {bigint | number} organizationId
- * @returns {Promise<object[]>}
- */
-export async function listActivePoliciesForOrg(organizationId) {
+export async function listActivePoliciesForOrg(
+  organizationId: bigint | number,
+): Promise<TravelPolicyRow[]> {
   return prisma.travelPolicy.findMany({
     where: { organizationId, active: true },
     include: { expenseCaps: true },
-  });
+  }) as unknown as Promise<TravelPolicyRow[]>;
 }
+
+/** Adapter pre-wireado del puerto PolicyAlertQueriesPort. */
+export const prismaPolicyAlertQueries: PolicyAlertQueriesPort = {
+  findRequestForPolicyPreview,
+  listActivePoliciesForOrg,
+};

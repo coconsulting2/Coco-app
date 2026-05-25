@@ -49,4 +49,10 @@ export interface WorkflowRuleRepository {
     id: bigint | number,
     patch: Partial<WorkflowRuleInput>,
   ): Promise<WorkflowRule>;
+
+  /**
+   * Alterna el flag `active` de una regla (soft delete) dentro del scope de la
+   * organización. Devuelve la regla resultante.
+   */
+  toggleRule(id: bigint | number, organizationId: bigint): Promise<WorkflowRule>;
 }

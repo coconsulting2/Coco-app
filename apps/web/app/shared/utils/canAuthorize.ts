@@ -14,7 +14,7 @@
  * exists purely to hide affordances the user can't use.
  */
 
-import type { UserRole } from "@type/roles";
+import type { UserRole } from "~/shared/types/roles";
 
 const APPROVER_ROLES = new Set<UserRole>(["N1", "N2"]);
 

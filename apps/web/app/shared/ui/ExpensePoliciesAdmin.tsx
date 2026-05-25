@@ -1,15 +1,20 @@
 /**
  * ExpensePoliciesAdmin — CRUD de políticas de viáticos (M2-006 RF-42, RF-43, RF-46).
- * Patrón: tabla + Modal + RHF/Zod + apiClient.
+ *
+ * Prop-driven: recibe `policies` y `categories` del loader de
+ * `routes/_app/admin/expense-policies.tsx`. Las mutaciones se envían vía
+ * `useFetcher` contra la `action` de la ruta (intents create/update/delete).
+ * Sin `apiRequest`/`fetch('/api/...')`/`token`. Tras un submit OK, RR7
+ * revalida el loader y refresca `policies` por prop.
  */
 import { useEffect, useMemo, useState } from "react";
 import { useForm, useFieldArray, Controller } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
-import Button from "@components/Button";
-import Modal from "@components/Modal";
-import Toast from "@components/Toast";
-import { apiRequest } from "@utils/apiClient";
+import { useFetcher } from "react-router";
+import Button from "~/shared/ui/Button";
+import Modal from "~/shared/ui/Modal";
+import Toast from "~/shared/ui/Toast";
 
 const VALID_SCOPES = ["nacional", "internacional", "any"] as const;
 const VALID_CAP_UNITS = ["per_night", "per_trip", "per_day", "per_event"] as const;
@@ -36,14 +41,14 @@ const policySchema = z.object({
 type PolicyFormData = z.infer<typeof policySchema>;
 
 interface ExpenseCap {
-  capId: number;
+  capId?: number;
   receiptTypeId: number;
   capAmount: string | number;
   capUnit: string;
   currency: string;
 }
 
-interface Policy {
+export interface PolicyProp {
   policyId: number;
   name: string;
   categoryId: number | null;
@@ -54,10 +59,10 @@ interface Policy {
   validFrom: string;
   validTo: string | null;
   active: boolean;
-  expenseCaps: ExpenseCap[];
+  expenseCaps?: ExpenseCap[];
 }
 
-interface Category {
+export interface CategoryProp {
   categoryId: number;
   name: string;
   code: string;
@@ -68,7 +73,12 @@ interface ReceiptType {
   receiptTypeName: string;
 }
 
-interface Props { token?: string }
+export interface ExpensePoliciesAdminProps {
+  policies: PolicyProp[];
+  categories: CategoryProp[];
+}
+
+type ActionResult = { ok: true; intent: string } | { ok: false; error: string; code?: string };
 
 const RECEIPT_TYPES_FALLBACK: ReceiptType[] = [
   { receiptTypeId: 1, receiptTypeName: "Hospedaje" },
@@ -76,79 +86,74 @@ const RECEIPT_TYPES_FALLBACK: ReceiptType[] = [
   { receiptTypeId: 6, receiptTypeName: "Vuelo" },
 ];
 
-/**
- * @param {Props} props
- */
-export default function ExpensePoliciesAdmin(_props: Props) {
-  const [policies, setPolicies] = useState<Policy[]>([]);
-  const [categories, setCategories] = useState<Category[]>([]);
+function asDateStr(v: string | null | undefined): string {
+  return (v || "").slice(0, 10);
+}
+
+export default function ExpensePoliciesAdmin({ policies, categories }: ExpensePoliciesAdminProps) {
   const [receiptTypes] = useState<ReceiptType[]>(RECEIPT_TYPES_FALLBACK);
-  const [editing, setEditing] = useState<Policy | null>(null);
+  const [editing, setEditing] = useState<PolicyProp | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
-  const [loading, setLoading] = useState(true);
+
+  const fetcher = useFetcher<ActionResult>();
+  const busy = fetcher.state !== "idle";
 
   const form = useForm<PolicyFormData>({
-    resolver: zodResolver(policySchema) as any,
+    resolver: zodResolver(policySchema) as never,
     defaultValues: {
       name: "", destinationScope: "any", currency: "MXN",
-      validFrom: "", validTo: "", caps: [], categoryId: "" as any,
+      validFrom: "", validTo: "", caps: [], categoryId: "",
     },
   });
   const { fields, append, remove } = useFieldArray({ control: form.control, name: "caps" });
 
+  // Reacciona al resultado de la action: cierra modal en éxito, muestra error.
   useEffect(() => {
-    void loadAll();
-  }, []);
-
-  async function loadAll() {
-    setLoading(true);
-    try {
-      const [polRes, catRes] = await Promise.all([
-        apiRequest<{ policies: Policy[] }>("/policies"),
-        apiRequest<{ categories: Category[] }>("/employee-categories"),
-      ]);
-      setPolicies(polRes.policies || []);
-      setCategories(catRes.categories || []);
-    } catch (e) {
-      console.error(e);
-      setToast({ message: "Error al cargar políticas.", type: "error" });
-    } finally {
-      setLoading(false);
+    if (fetcher.state !== "idle" || !fetcher.data) return;
+    if (fetcher.data.ok) {
+      setModalOpen(false);
+      setToast({ message: "Operación completada.", type: "success" });
+    } else {
+      setToast({ message: fetcher.data.error, type: "error" });
     }
-  }
+  }, [fetcher.state, fetcher.data]);
 
   function openCreate() {
     setEditing(null);
     form.reset({
       name: "", destinationScope: "any", currency: "MXN",
-      validFrom: new Date().toISOString().slice(0, 10), validTo: "", caps: [], categoryId: "" as any,
+      validFrom: new Date().toISOString().slice(0, 10), validTo: "", caps: [], categoryId: "",
     });
     setModalOpen(true);
   }
 
-  function openEdit(p: Policy) {
+  function openEdit(p: PolicyProp) {
     setEditing(p);
     form.reset({
       name: p.name,
-      categoryId: (p.categoryId ?? "") as any,
-      destinationScope: (p.destinationScope as any) || "any",
+      categoryId: p.categoryId ?? "",
+      destinationScope: (VALID_SCOPES as readonly string[]).includes(p.destinationScope)
+        ? (p.destinationScope as PolicyFormData["destinationScope"])
+        : "any",
       costsCenter: p.costsCenter || "",
-      dailyPerDiem: (p.dailyPerDiem == null ? "" : Number(p.dailyPerDiem)) as any,
+      dailyPerDiem: p.dailyPerDiem == null ? "" : Number(p.dailyPerDiem),
       currency: p.currency || "MXN",
-      validFrom: (p.validFrom || "").slice(0, 10),
-      validTo: p.validTo ? p.validTo.slice(0, 10) : "",
+      validFrom: asDateStr(p.validFrom),
+      validTo: p.validTo ? asDateStr(p.validTo) : "",
       caps: (p.expenseCaps || []).map((c) => ({
         receiptTypeId: c.receiptTypeId,
         capAmount: Number(c.capAmount),
-        capUnit: c.capUnit as any,
+        capUnit: (VALID_CAP_UNITS as readonly string[]).includes(c.capUnit)
+          ? (c.capUnit as PolicyFormData["caps"][number]["capUnit"])
+          : "per_event",
         currency: c.currency || "MXN",
       })),
     });
     setModalOpen(true);
   }
 
-  async function onSubmit(values: PolicyFormData) {
+  function onSubmit(values: PolicyFormData) {
     const payload = {
       ...values,
       categoryId: values.categoryId === "" ? null : values.categoryId,
@@ -156,31 +161,23 @@ export default function ExpensePoliciesAdmin(_props: Props) {
       validTo: values.validTo === "" ? null : values.validTo,
       costsCenter: values.costsCenter || null,
     };
-    try {
-      if (editing) {
-        await apiRequest(`/policies/${editing.policyId}`, { method: "PUT", data: payload });
-        setToast({ message: "Política actualizada.", type: "success" });
-      } else {
-        await apiRequest("/policies", { method: "POST", data: payload });
-        setToast({ message: "Política creada.", type: "success" });
-      }
-      setModalOpen(false);
-      void loadAll();
-    } catch (e: any) {
-      const msg = e?.detail?.response?.error || "Error al guardar la política.";
-      setToast({ message: msg, type: "error" });
+    const fd = new FormData();
+    fd.set("payload", JSON.stringify(payload));
+    if (editing) {
+      fd.set("intent", "update");
+      fd.set("policyId", String(editing.policyId));
+    } else {
+      fd.set("intent", "create");
     }
+    fetcher.submit(fd, { method: "post" });
   }
 
-  async function onDelete(p: Policy) {
+  function onDelete(p: PolicyProp) {
     if (!confirm(`¿Desactivar la política "${p.name}"?`)) return;
-    try {
-      await apiRequest(`/policies/${p.policyId}`, { method: "DELETE" });
-      setToast({ message: "Política desactivada.", type: "success" });
-      void loadAll();
-    } catch (e: any) {
-      setToast({ message: e?.detail?.response?.error || "Error al desactivar.", type: "error" });
-    }
+    const fd = new FormData();
+    fd.set("intent", "delete");
+    fd.set("policyId", String(p.policyId));
+    fetcher.submit(fd, { method: "post" });
   }
 
   const sorted = useMemo(
@@ -190,7 +187,7 @@ export default function ExpensePoliciesAdmin(_props: Props) {
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "1rem" }}>
-        <p style={{ margin: 0 }}>{loading ? "Cargando…" : `${policies.length} políticas`}</p>
+        <p style={{ margin: 0 }}>{`${policies.length} políticas`}</p>
         <Button variant="filled" color="primary" onClick={openCreate}>+ Nueva política</Button>
       </div>
 
@@ -214,8 +211,8 @@ export default function ExpensePoliciesAdmin(_props: Props) {
               <td style={td}>{p.destinationScope}</td>
               <td style={td}>{p.costsCenter || "—"}</td>
               <td style={td}>
-                {(p.validFrom || "").slice(0, 10)}
-                {p.validTo ? ` → ${p.validTo.slice(0, 10)}` : " → ∞"}
+                {asDateStr(p.validFrom)}
+                {p.validTo ? ` → ${asDateStr(p.validTo)}` : " → ∞"}
               </td>
               <td style={td}>{p.expenseCaps?.length || 0}</td>
               <td style={td}>
@@ -243,7 +240,13 @@ export default function ExpensePoliciesAdmin(_props: Props) {
             <label>
               Categoría de empleado
               <Controller name="categoryId" control={form.control} render={({ field }) => (
-                <select {...field} value={field.value as any}>
+                <select
+                  name={field.name}
+                  ref={field.ref}
+                  onBlur={field.onBlur}
+                  value={field.value === undefined || field.value === null ? "" : String(field.value)}
+                  onChange={(e) => field.onChange(e.target.value === "" ? "" : Number(e.target.value))}
+                >
                   <option value="">—</option>
                   {categories.map((c) => <option key={c.categoryId} value={c.categoryId}>{c.name}</option>)}
                 </select>
@@ -282,7 +285,9 @@ export default function ExpensePoliciesAdmin(_props: Props) {
 
             <div style={{ display: "flex", gap: "0.5rem", justifyContent: "flex-end" }}>
               <Button variant="border" color="primary" onClick={() => setModalOpen(false)}>Cancelar</Button>
-              <Button type="submit" variant="filled" color="primary">{editing ? "Guardar" : "Crear"}</Button>
+              <Button type="submit" variant="filled" color="primary" disabled={busy}>
+                {busy ? "Guardando…" : editing ? "Guardar" : "Crear"}
+              </Button>
             </div>
           </form>
         </Modal>

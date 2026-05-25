@@ -1,5 +1,3 @@
-// @ts-nocheck — legacy CFDI logic; typed properly is M9 follow-up
-/* eslint-disable @typescript-eslint/no-explicit-any */
 /**
  * @module cfdiQueryService
  * @description Application-layer thin wrapper sobre CfdiModel. Existe para
@@ -7,14 +5,14 @@
  * SIN importar el modelo Prisma directamente — respeta la regla de no
  * cross-slice por `infrastructure/`.
  */
-import CfdiModel from "~/contexts/receipts-cfdi/infrastructure/cfdiModel.js";
+import CfdiModel, {
+  type CfdiUuidRef,
+} from "~/contexts/receipts-cfdi/infrastructure/cfdiModel.js";
 
-/**
- * Busca un CFDI por UUID (case-insensitive). Devuelve null si no existe.
- * @param {string} uuid - UUID del CFDI (cualquier casing)
- * @returns {Promise<object|null>}
- */
-export async function findByCfdiUuid(uuid: any) {
+/** Busca un CFDI por UUID (case-insensitive). Devuelve null si no existe. */
+export async function findByCfdiUuid(
+  uuid: string | null | undefined,
+): Promise<CfdiUuidRef | null> {
   if (!uuid || typeof uuid !== "string") return null;
   return CfdiModel.findByCfdiUuidInsensitive(uuid.toLowerCase());
 }

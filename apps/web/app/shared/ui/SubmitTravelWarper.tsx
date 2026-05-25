@@ -1,82 +1,43 @@
-import { apiRequest } from "@utils/apiClient";
+/**
+ * @module SubmitTravelWarper
+ * @description Helpers puros (sin I/O) compartidos entre el formulario de
+ * comprobación (`ExpensesForm`) y la action RR7 de `subir-comprobante.$id`.
+ *
+ * Histórico: este módulo exportaba `submitTravelExpense`, que disparaba
+ * `apiRequest` a `/applicant/create-expense-validation` y luego a
+ * `/accounts-payable/get-expense-validations/:id` para descubrir el
+ * `lastReceiptId`. Esa orquestación ahora vive en la action RR7
+ * (`subir-comprobante.$id`) consumiendo los use-cases del slice
+ * (`createExpenseValidationBatch` + `getReceiptsForRequestValidation`), por lo
+ * que aquí sólo queda el mapeo concepto → receiptTypeId, que es la regla de
+ * negocio compartida 1:1 con el seed (M2-006).
+ */
 
-const receiptTypeMap: Record<string, number> = {
-  "Autobús": 5,
-  "Caseta": 4,
-  "Comida": 2,
-  "Hospedaje": 1,
-  "Otro": 7,
-  "Transporte": 3,
-  "Vuelo": 6,
+/** Mapping concepto (label visible) → receiptTypeId del seed (M2-006). */
+export const CONCEPTO_TO_RECEIPT_TYPE_ID: Record<string, number> = {
+  Hospedaje: 1,
+  Comida: 2,
+  Transporte: 3,
+  Caseta: 4,
+  Autobús: 5,
+  Vuelo: 6,
+  Otro: 7,
 };
 
-interface SubmitExpenseParams {
-  requestId: number;
-  concepto: string;
-  monto: number;
-  token: string;
-  /** UUID del TimbreFiscalDigital (obligatorio salvo viaje internacional sin XML real). */
-  cfdiUuid?: string | null;
-  /** Viaje internacional con XML sustituto: el backend no exige cfdi_uuid ni anti-duplicado por UUID. */
-  allowMissingCfdiUuid?: boolean;
-}
+/** Lista de conceptos en el orden histórico del `<select>` del formulario. */
+export const CONCEPTO_OPTIONS: readonly string[] = [
+  "Transporte",
+  "Hospedaje",
+  "Comida",
+  "Caseta",
+  "Autobús",
+  "Vuelo",
+  "Otro",
+];
 
-export async function submitTravelExpense({
-  requestId,
-  concepto,
-  monto,
-  token,
-  cfdiUuid,
-  allowMissingCfdiUuid = false,
-}: SubmitExpenseParams): Promise<{ count: number; lastReceiptId: number | null }> {
-  const receipt_type_id = receiptTypeMap[concepto];
-  if (!receipt_type_id) throw new Error(`Concepto inválido: ${concepto}`);
-
-  const receiptRow: {
-    receipt_type_id: number;
-    request_id: number;
-    amount: number;
-    cfdi_uuid?: string;
-  } = {
-    receipt_type_id,
-    request_id: requestId,
-    amount: monto,
-  };
-  if (cfdiUuid && cfdiUuid.trim()) {
-    receiptRow.cfdi_uuid = cfdiUuid.trim().toLowerCase();
-  }
-
-  const payload: {
-    receipts: typeof receiptRow[];
-    allow_missing_cfdi_uuid?: boolean;
-  } = {
-    receipts: [receiptRow],
-  };
-  if (allowMissingCfdiUuid) {
-    payload.allow_missing_cfdi_uuid = true;
-  }
-
-  await apiRequest("/applicant/create-expense-validation", {
-    method: "POST",
-    data: payload,
-    headers: { Authorization: `Bearer ${token}` }
-  });
-
-  // Espera un momento dice mike
-  await new Promise((res) => setTimeout(res, 500));
-
-  const res = await apiRequest(`/accounts-payable/get-expense-validations/${requestId}`, { 
-    method: "GET",
-    headers: { Authorization: `Bearer ${token}` } 
-  });
-
-  const expenses = res.Expenses ?? [];
-  const count = expenses.length;
-
-  expenses.sort((a: { receipt_id: number }, b: { receipt_id: number }) => b.receipt_id - a.receipt_id);
-  const lastReceiptId = count > 0 ? expenses[0].receipt_id : null;
-
-  //alert(`Comprobante enviado exitosamente.`);
-
-  return { count, lastReceiptId };
+/** Resuelve el receiptTypeId de un concepto; lanza si es inválido (paridad legacy). */
+export function receiptTypeIdForConcepto(concepto: string): number {
+  const id = CONCEPTO_TO_RECEIPT_TYPE_ID[concepto];
+  if (!id) throw new Error(`Concepto inválido: ${concepto}`);
+  return id;
 }

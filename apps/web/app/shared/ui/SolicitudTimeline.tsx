@@ -1,47 +1,18 @@
 /**
  * @file SolicitudTimeline.tsx
- * @description Stepper horizontal del recorrido de la solicitud (completado, actual y pendiente).
- *              GET /api/solicitudes/:id/historial
+ * @description Stepper horizontal del recorrido de la solicitud (completado,
+ *              actual y pendiente). Loader-driven: recibe el recorrido ya
+ *              construido vía prop `initialJourney` (use-case `getSolicitudJourney`
+ *              del slice travel-requests). Sin fetch interno.
  */
 
-import { useEffect, useState } from "react";
-import { apiRequest } from "@utils/apiClient";
-
-type StepState =
-  | "completed"
-  | "current"
-  | "pending"
-  | "skipped"
-  | "failed"
-  | "cancelled";
-
-interface JourneyStep {
-  key: string;
-  statusId: number;
-  label: string;
-  state: StepState;
-  timestamp: string | null;
-  actor: string | null;
-  note: string | null;
-}
-
-interface TimelineEvent {
-  action: string;
-  user: string;
-  role: string;
-  timestamp: string;
-  comment: string | null;
-}
-
-interface JourneyResponse {
-  currentStatusId: number;
-  currentStatusLabel: string;
-  steps: JourneyStep[];
-  events: TimelineEvent[];
-}
+import type {
+  StepState,
+  JourneyOutput,
+} from "~/contexts/travel-requests/index.js";
 
 interface Props {
-  requestId: number;
+  initialJourney: JourneyOutput | null;
 }
 
 const ACTION_LABEL: Record<string, string> = {
@@ -123,28 +94,8 @@ function stateCaption(state: StepState): string | null {
   }
 }
 
-export default function SolicitudTimeline({ requestId }: Props) {
-  const [journey, setJourney] = useState<JourneyResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    apiRequest<JourneyResponse>(`/solicitudes/${requestId}/historial`)
-      .then((data) => {
-        if (!cancelled) setJourney(data);
-      })
-      .catch(() => {
-        if (!cancelled) setError("No se pudo cargar el historial.");
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [requestId]);
-
+export default function SolicitudTimeline({ initialJourney }: Props) {
+  const journey = initialJourney;
   const steps = journey?.steps ?? [];
   const events = journey?.events ?? [];
 
@@ -168,23 +119,13 @@ export default function SolicitudTimeline({ requestId }: Props) {
         )}
       </header>
 
-      {loading && (
-        <p className="text-sm" style={{ color: "var(--color-ink-muted)" }}>
-          Cargando recorrido…
-        </p>
-      )}
-
-      {!loading && error && (
-        <p className="text-sm text-red-500">{error}</p>
-      )}
-
-      {!loading && !error && steps.length === 0 && (
+      {steps.length === 0 && (
         <p className="text-sm" style={{ color: "var(--color-ink-muted)" }}>
           Esta solicitud aún no tiene movimientos registrados.
         </p>
       )}
 
-      {!loading && !error && steps.length > 0 && (
+      {steps.length > 0 && (
         <>
           <div
             className="overflow-x-auto pb-2 -mx-1 px-1"

@@ -1,31 +1,56 @@
-// @ts-nocheck — bulk-converted legacy; typed properly is M9 follow-up
 /**
  * @module policyAlertService
  * @description Helper liviano para el endpoint POST /api/policies/preview
- * (M2-006 RF-44). Resuelve la política aplicable de la solicitud y evalúa
- * un receipt hipotético.
- *
- * Refactor Fase 6: prisma extraído a policyAlertQueries.js.
+ * (M2-006 RF-44). Resuelve la política aplicable de la solicitud y evalúa un
+ * receipt hipotético. Recibe el puerto de queries por DI.
  */
 import {
   evaluateReceiptAgainstPolicy,
   findApplicablePolicy,
+  type CapBreach,
+  type DestinationScope,
+  type ExpenseCapRow as EngineExpenseCapRow,
+  type TravelPolicyRow as EngineTravelPolicyRow,
 } from "~/contexts/refunds/application/refundRuleEngine.js";
-import {
-  findRequestForPolicyPreview,
-  listActivePoliciesForOrg,
+import { prismaPolicyAlertQueries } from "~/contexts/policies/infrastructure/policyAlertQueries.js";
+import type {
+  PolicyAlertQueriesPort,
+  RequestForPolicyPreview,
 } from "~/contexts/policies/infrastructure/policyAlertQueries.js";
+import { httpError } from "~/contexts/policies/domain/types";
 
-/**
- * @param {object} request
- * @returns {string}
- */
-function inferDestinationScope(request) {
-  // Si Request.policyEvaluationSnapshot ya tiene el scope congelado, úsalo.
+export interface PolicyAlertServiceDeps {
+  queries: PolicyAlertQueriesPort;
+}
+
+const defaultDeps: PolicyAlertServiceDeps = { queries: prismaPolicyAlertQueries };
+
+export interface CheckReceiptInput {
+  requestId: number;
+  receiptTypeId: number;
+  amount: number;
+  currency?: string;
+  nights?: number;
+  days?: number;
+  categoryId?: number | null;
+  costsCenter?: string | null;
+}
+
+export interface CheckReceiptResult {
+  exceeded: boolean;
+  policyId: number | null;
+  capId: number | null;
+  capAmount: number | null;
+  capUnit: string | null;
+  currency: string;
+  excessTotal: number;
+  message: string;
+}
+
+function inferDestinationScope(request: RequestForPolicyPreview): DestinationScope {
   const snap = request.policyEvaluationSnapshot;
-  if (snap && snap.destinationScope) return snap.destinationScope;
+  if (snap && snap.destinationScope) return snap.destinationScope as DestinationScope;
 
-  // Heurística: si alguna ruta tiene country origen != country destino → "internacional".
   const routes = request.routeRequests || [];
   const isInternational = routes.some((rr) => {
     const r = rr.route;
@@ -37,59 +62,57 @@ function inferDestinationScope(request) {
 }
 
 /**
- * Pre-evaluación de un receipt aún no creado contra la política aplicable a
- * la solicitud. Usa Request.policyEvaluationSnapshot si existe (RF-46 no
+ * Pre-evaluación de un receipt aún no creado contra la política aplicable a la
+ * solicitud. Usa Request.policyEvaluationSnapshot si existe (RF-46 no
  * retroactividad); si no, busca en vivo.
- *
- * @param {{
- *   requestId: number,
- *   receiptTypeId: number,
- *   amount: number,
- *   currency?: string,
- *   nights?: number,
- *   days?: number,
- *   categoryId?: number | null,
- *   costsCenter?: string | null
- * }} input
  */
-export async function checkReceiptBeforeSubmit(input) {
+export async function checkReceiptBeforeSubmit(
+  input: CheckReceiptInput,
+  deps: PolicyAlertServiceDeps = defaultDeps,
+): Promise<CheckReceiptResult> {
   const requestId = Number(input.requestId);
-  const request = await findRequestForPolicyPreview(requestId);
+  const request = await deps.queries.findRequestForPolicyPreview(requestId);
   if (!request) {
-    const err = new Error(`Solicitud ${requestId} no encontrada.`);
-    err.status = 404;
-    throw err;
+    throw httpError(`Solicitud ${requestId} no encontrada.`, 404);
   }
 
   const snapshot = request.policyEvaluationSnapshot;
-  let policy = null;
-  let caps = [];
+  let policy: EngineTravelPolicyRow | null = null;
+  let caps: EngineExpenseCapRow[] = [];
 
   if (snapshot && snapshot.policyId) {
-    // Reconstruir desde el snapshot inmovilizado (RF-46).
     policy = {
       policyId: snapshot.policyId,
-      organizationId: request.user?.organizationId ?? null,
-      name: snapshot.name,
+      organizationId: request.user?.organizationId ?? 0,
+      name: snapshot.name ?? "",
       categoryId: snapshot.categoryId ?? null,
-      destinationScope: snapshot.destinationScope || "any",
+      destinationScope: (snapshot.destinationScope as DestinationScope) || "any",
       costsCenter: snapshot.costsCenter ?? null,
       dailyPerDiem: snapshot.dailyPerDiem ?? null,
       currency: snapshot.currency || "MXN",
-      validFrom: snapshot.validFrom,
-      validTo: snapshot.validTo,
+      validFrom: snapshot.validFrom ?? new Date().toISOString(),
+      validTo: snapshot.validTo ?? null,
       active: true,
     };
-    caps = (snapshot.caps || []).map((c) => ({ ...c, policyId: snapshot.policyId }));
+    caps = (snapshot.caps || []).map((c) => ({
+      capId: c.capId,
+      policyId: snapshot.policyId as number,
+      receiptTypeId: c.receiptTypeId,
+      capAmount: c.capAmount,
+      capUnit: c.capUnit as EngineExpenseCapRow["capUnit"],
+      currency: c.currency,
+    }));
   } else if (request.user && request.user.organizationId) {
-    const policies = await listActivePoliciesForOrg(request.user.organizationId);
-    policy = findApplicablePolicy(policies, {
+    const policies = await deps.queries.listActivePoliciesForOrg(request.user.organizationId);
+    policy = findApplicablePolicy(policies as unknown as EngineTravelPolicyRow[], {
       categoryId: input.categoryId ?? null,
       destinationScope: inferDestinationScope(request),
       costsCenter: input.costsCenter ?? null,
       evaluationDate: new Date(),
     });
-    caps = policy ? policy.expenseCaps : [];
+    caps = policy
+      ? ((policy as { expenseCaps?: EngineExpenseCapRow[] }).expenseCaps ?? [])
+      : [];
   }
 
   const result = evaluateReceiptAgainstPolicy(
@@ -104,15 +127,14 @@ export async function checkReceiptBeforeSubmit(input) {
     policy,
   );
 
-  // Selecciona el cap más restrictivo cuando hay exceso.
-  let topBreach = null;
+  let topBreach: CapBreach | null = null;
   for (const b of result.excessByCap) {
     if (b.excess > 0 && (!topBreach || b.excessTotal > topBreach.excessTotal)) topBreach = b;
   }
 
+  const fmt = (n: number) => Number(n).toFixed(2);
   let message = "";
   if (result.exceeded && topBreach) {
-    const fmt = (n) => Number(n).toFixed(2);
     message =
       `Excede política: tope ${fmt(topBreach.capAmount)} ${topBreach.currency} (${topBreach.capUnit}); ` +
       `monto unitario ${fmt(topBreach.unitAmount)}, exceso total ${fmt(topBreach.excessTotal)}.`;
@@ -133,3 +155,7 @@ export async function checkReceiptBeforeSubmit(input) {
     message,
   };
 }
+
+// ── Aliases de paridad con la API pública del slice ─────────────────────────
+export const previewReceipt = checkReceiptBeforeSubmit;
+export const raisePolicyAlert = checkReceiptBeforeSubmit;

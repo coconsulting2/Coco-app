@@ -1,71 +1,81 @@
-// @ts-nocheck — bulk-converted legacy; typed properly is M9 follow-up
 /**
  * @module policyExceptionService
  * @description Excepciones a políticas de viáticos solicitadas y resueltas
  * (M2-006 RF-44, RF-45). Crear excepción: solicitante con justificación
  * obligatoria (>=10 chars). Decidir: solo aprobador designado en
  * Request.workflowPreSnapshot con permiso `expense:authorize_exception`.
- *
- * Refactor Fase 6: prisma extraído a policyExceptionQueries.js.
+ * Recibe el puerto de queries por DI.
  */
-import { createNotification } from "~/contexts/notifications/application/notificationService.js";
+import { createNotification } from "~/contexts/notifications";
+import { prismaPolicyExceptionQueries } from "~/contexts/policies/infrastructure/policyExceptionQueries.js";
+import type {
+  PendingExceptionWithJoins,
+  PolicyExceptionQueriesPort,
+} from "~/contexts/policies/domain/ports/PolicyExceptionQueriesPort";
 import {
-  findRequestForException,
-  createPolicyException,
-  findExceptionWithRequest,
-  decideExceptionTx,
-  findPendingExceptionsForRequest,
-  findAllPendingExceptions,
-} from "~/contexts/policies/infrastructure/policyExceptionQueries.js";
+  httpError,
+  type PolicyExceptionRow,
+  type WorkflowPreSnapshot,
+} from "~/contexts/policies/domain/types";
 
 const MIN_JUSTIFICATION_LEN = 10;
 
-function authorizerIdsFromSnapshot(snapshot) {
+export interface PolicyExceptionServiceDeps {
+  queries: PolicyExceptionQueriesPort;
+  notify: (userId: number, message: string) => Promise<unknown>;
+}
+
+const defaultDeps: PolicyExceptionServiceDeps = {
+  queries: prismaPolicyExceptionQueries,
+  notify: createNotification,
+};
+
+export interface CreateExceptionPayload {
+  requestId: number;
+  receiptId?: number | null;
+  policyId?: number | null;
+  capId?: number | null;
+  amountClaimed: number;
+  amountAllowed?: number | null;
+  excessAmount: number;
+  justification: string;
+  requestedById: number;
+}
+
+export type ExceptionDecision = "APPROVED" | "REJECTED";
+
+function authorizerIdsFromSnapshot(snapshot: WorkflowPreSnapshot | null): number[] {
   if (!snapshot || typeof snapshot !== "object") return [];
-  const ids = [];
+  const ids: number[] = [];
   if (snapshot.n1UserId) ids.push(Number(snapshot.n1UserId));
   if (snapshot.n2UserId) ids.push(Number(snapshot.n2UserId));
   return ids;
 }
 
-/**
- * Creates a PENDING exception and notifies designated approvers.
- *
- * @param {{
- *   requestId: number,
- *   receiptId?: number,
- *   policyId?: number,
- *   capId?: number,
- *   amountClaimed: number,
- *   amountAllowed?: number,
- *   excessAmount: number,
- *   justification: string,
- *   requestedById: number
- * }} payload
- */
-export async function createException(payload) {
+/** Creates a PENDING exception and notifies designated approvers. */
+export async function createException(
+  payload: CreateExceptionPayload,
+  deps: PolicyExceptionServiceDeps = defaultDeps,
+): Promise<PolicyExceptionRow> {
   if (
     !payload.justification ||
     String(payload.justification).trim().length < MIN_JUSTIFICATION_LEN
   ) {
-    const err = new Error(`Justificación requerida (mínimo ${MIN_JUSTIFICATION_LEN} caracteres).`);
-    err.status = 400;
-    throw err;
+    throw httpError(
+      `Justificación requerida (mínimo ${MIN_JUSTIFICATION_LEN} caracteres).`,
+      400,
+    );
   }
   if (!payload.requestId || !payload.requestedById) {
-    const err = new Error("requestId y requestedById son requeridos.");
-    err.status = 400;
-    throw err;
+    throw httpError("requestId y requestedById son requeridos.", 400);
   }
 
-  const request = await findRequestForException(payload.requestId);
+  const request = await deps.queries.findRequestForException(payload.requestId);
   if (!request) {
-    const err = new Error(`Solicitud ${payload.requestId} no encontrada.`);
-    err.status = 404;
-    throw err;
+    throw httpError(`Solicitud ${payload.requestId} no encontrada.`, 404);
   }
 
-  const created = await createPolicyException({
+  const created = await deps.queries.createPolicyException({
     organizationId: request.organizationId,
     requestId: Number(payload.requestId),
     receiptId: payload.receiptId ? Number(payload.receiptId) : null,
@@ -81,55 +91,49 @@ export async function createException(payload) {
 
   const approvers = authorizerIdsFromSnapshot(request.workflowPreSnapshot);
   for (const userId of approvers) {
-    await createNotification(
-      userId,
-      `Nueva excepción de política para solicitud #${request.requestId}: $${Number(payload.excessAmount).toFixed(2)} sobre el tope.`,
-    ).catch(() => null);
+    await deps
+      .notify(
+        userId,
+        `Nueva excepción de política para solicitud #${request.requestId}: $${Number(payload.excessAmount).toFixed(2)} sobre el tope.`,
+      )
+      .catch(() => null);
   }
 
   return created;
 }
 
-/**
- * Decides an exception (APPROVED or REJECTED) y aplica efectos colaterales.
- *
- * @param {number} exceptionId
- * @param {"APPROVED" | "REJECTED"} decision
- * @param {number} decidedById
- * @param {string} [decisionNote]
- */
-export async function decideException(exceptionId, decision, decidedById, decisionNote = null) {
+/** Decides an exception (APPROVED or REJECTED) y aplica efectos colaterales. */
+export async function decideException(
+  exceptionId: number,
+  decision: ExceptionDecision,
+  decidedById: number,
+  decisionNote: string | null = null,
+  deps: PolicyExceptionServiceDeps = defaultDeps,
+): Promise<PolicyExceptionRow> {
   if (decision !== "APPROVED" && decision !== "REJECTED") {
-    const err = new Error("Decisión inválida; usar APPROVED o REJECTED.");
-    err.status = 400;
-    throw err;
+    throw httpError("Decisión inválida; usar APPROVED o REJECTED.", 400);
   }
-  const exception = await findExceptionWithRequest(exceptionId);
+  const exception = await deps.queries.findExceptionWithRequest(exceptionId);
   if (!exception) {
-    const err = new Error(`Excepción ${exceptionId} no encontrada.`);
-    err.status = 404;
-    throw err;
+    throw httpError(`Excepción ${exceptionId} no encontrada.`, 404);
   }
   if (exception.status !== "PENDING") {
-    const err = new Error("Esta excepción ya fue decidida y no puede modificarse.");
-    err.status = 400;
-    throw err;
+    throw httpError("Esta excepción ya fue decidida y no puede modificarse.", 400);
   }
 
   const allowedApprovers = authorizerIdsFromSnapshot(exception.request.workflowPreSnapshot);
   if (allowedApprovers.length > 0 && !allowedApprovers.includes(Number(decidedById))) {
-    const err = new Error(
+    throw httpError(
       "Solo los aprobadores designados de la solicitud pueden decidir esta excepción.",
+      403,
     );
-    err.status = 403;
-    throw err;
   }
 
   const accion = decision === "APPROVED" ? "APROBADO" : "RECHAZADO";
   const refundFlag = decision === "APPROVED";
   const note = decisionNote ? String(decisionNote).trim() : null;
 
-  const updated = await decideExceptionTx({
+  const updated = await deps.queries.decideExceptionTx({
     exceptionId: Number(exceptionId),
     exceptionUpdate: {
       status: decision,
@@ -150,31 +154,44 @@ export async function decideException(exceptionId, decision, decidedById, decisi
 
   if (exception.request.userId) {
     const verb = decision === "APPROVED" ? "aprobada" : "rechazada";
-    await createNotification(
-      exception.request.userId,
-      `Tu excepción de política para solicitud #${exception.requestId} fue ${verb}.`,
-    ).catch(() => null);
+    await deps
+      .notify(
+        exception.request.userId,
+        `Tu excepción de política para solicitud #${exception.requestId} fue ${verb}.`,
+      )
+      .catch(() => null);
   }
 
   return updated;
 }
 
-/**
- * @param {number} requestId
- */
-export async function listPendingForRequest(requestId) {
-  return findPendingExceptionsForRequest(requestId);
+/** Lista las excepciones PENDING de una solicitud. */
+export async function listPendingForRequest(
+  requestId: number,
+  deps: PolicyExceptionServiceDeps = defaultDeps,
+): Promise<PolicyExceptionRow[]> {
+  return deps.queries.findPendingExceptionsForRequest(requestId);
 }
 
-/**
- * Lists exceptions pending an approver decision.
- *
- * @param {number} approverUserId
- */
-export async function listPendingForApprover(approverUserId) {
-  const all = await findAllPendingExceptions();
+/** Lists exceptions pending an approver decision. */
+export async function listPendingForApprover(
+  approverUserId: number,
+  deps: PolicyExceptionServiceDeps = defaultDeps,
+): Promise<PendingExceptionWithJoins[]> {
+  const all = await deps.queries.findAllPendingExceptions();
   return all.filter((ex) => {
     const approvers = authorizerIdsFromSnapshot(ex.request.workflowPreSnapshot);
     return approvers.length === 0 || approvers.includes(Number(approverUserId));
   });
 }
+
+/** Lista todas las excepciones PENDING (sin filtrar por aprobador). */
+export async function listExceptions(
+  deps: PolicyExceptionServiceDeps = defaultDeps,
+): Promise<PendingExceptionWithJoins[]> {
+  return deps.queries.findAllPendingExceptions();
+}
+
+// ── Aliases de paridad con la API pública del slice ─────────────────────────
+export const requestException = createException;
+export const approveException = decideException;

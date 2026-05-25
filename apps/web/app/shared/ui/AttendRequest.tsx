@@ -7,9 +7,9 @@
  */
 import { useEffect, useMemo, useState } from "react";
 import { useFetcher } from "react-router";
-import ModalWrapper from "@components/ModalWrapper";
-import Toast from "@components/Toast";
-import { showAppAlert } from "@utils/appAlert";
+import ModalWrapper from "~/shared/ui/ModalWrapper";
+import Toast from "~/shared/ui/Toast";
+import { showAppAlert } from "~/shared/utils/appAlert";
 
 const IATA_SUGGESTIONS = [
   "MEX",

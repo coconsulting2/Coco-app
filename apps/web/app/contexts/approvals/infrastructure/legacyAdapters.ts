@@ -7,15 +7,9 @@
  * directo del slice public API.
  */
 import { statusAfterN1Approval, statusAfterN2Approval } from "~/contexts/workflow";
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore — legacy JS (policies slice pending)
-import * as legacyPolicyExceptionService from "~/contexts/policies/application/policyExceptionService.js";
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore — legacy JS (accounts-payable slice pending)
-import legacyAnticipoPolizaLifecycleService from "~/contexts/accounts-payable/application/anticipoPolizaLifecycleService.js";
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore — legacy JS (onboarding slice pending)
-import legacyEmployeeHierarchyService from "~/contexts/onboarding/application/employeeHierarchyService.js";
+import * as legacyPolicyExceptionService from "~/contexts/policies/application/policyExceptionService";
+import legacyAnticipoPolizaLifecycleService from "~/contexts/accounts-payable/application/anticipoPolizaLifecycleService";
+import legacyEmployeeHierarchyService from "~/contexts/onboarding/application/employeeHierarchyService";
 
 import type { WorkflowRulesPort } from "~/contexts/approvals/domain/ports/WorkflowRulesPort.js";
 import type {
@@ -42,7 +36,8 @@ export class WorkflowRulesAdapter implements WorkflowRulesPort {
 export class LegacyPolicyExceptionAdapter implements PolicyExceptionPort {
   async listPendingForRequest(requestId: number): Promise<PolicyException[]> {
     const result = await legacyPolicyExceptionService.listPendingForRequest(requestId);
-    return (result ?? []) as PolicyException[];
+    // El slice policies expone `exceptionId`; el puerto de approvals usa `id`.
+    return (result ?? []).map((row) => ({ ...row, id: row.exceptionId }));
   }
   async decideException(
     exceptionId: number,

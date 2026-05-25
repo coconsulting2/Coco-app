@@ -1,27 +1,35 @@
-// @ts-nocheck — legacy provider; will be removed when dispatchers delegate to @coco/integrations
 /**
- * Tres vuelos estáticos (fallback demo / FLIGHT_PROVIDER=mock).
+ * @module MockFlightProvider
+ * @description Adapter del puerto `FlightProvider` con tres vuelos estáticos
+ * (fallback demo / FLIGHT_PROVIDER=mock). Paridad con el legacy
+ * `services/mockFlightProvider.js`.
  */
+import type {
+  FlightSearchParams,
+  NormalizedFlightOffer,
+} from "@coco/integrations/duffel";
+import type { FlightProvider } from "~/contexts/flights/domain/ports/FlightProvider.js";
 
-/**
- *
- */
-export class MockFlightProvider {
-  /**
-   * @param {import("./flightProvider.js").FlightSearchParams} params
-   * @returns {Promise<import("./flightProvider.js").NormalizedFlightOffer[]>}
-   */
-  async searchOffers(params) {
+type MockSeed = Omit<NormalizedFlightOffer, "id" | "rawOfferId"> & {
+  id: string;
+  rawOfferId: string;
+};
+
+export class MockFlightProvider implements FlightProvider {
+  async searchOffers(
+    params: FlightSearchParams,
+  ): Promise<NormalizedFlightOffer[]> {
     const origin = String(params.origin || "MEX").toUpperCase();
     const dest = String(params.destination || "CUN").toUpperCase();
     const date = String(params.departureDate || "2026-06-01");
     const returnDate = params.returnDate ? String(params.returnDate) : "";
     const pax = Math.max(1, Math.min(9, Number(params.passengers) || 1));
-    const roundTrip = returnDate && returnDate > date;
+    const roundTrip = Boolean(returnDate && returnDate > date);
 
-    const offers = [
+    const seeds: MockSeed[] = [
       {
         id: "mock-zz-001",
+        rawOfferId: "mock-zz-001",
         airlineName: "Duffel Airways (sandbox)",
         airlineIata: "ZZ",
         departureAt: `${date}T08:00:00.000Z`,
@@ -30,10 +38,10 @@ export class MockFlightProvider {
         stops: 0,
         totalAmount: 2450 * pax,
         totalCurrency: "MXN",
-        rawOfferId: "mock-zz-001",
       },
       {
         id: "mock-exp-002",
+        rawOfferId: "mock-exp-002",
         airlineName: "Aerolínea Demo",
         airlineIata: "DM",
         departureAt: `${date}T14:15:00.000Z`,
@@ -42,10 +50,10 @@ export class MockFlightProvider {
         stops: 1,
         totalAmount: 1899.5 * pax,
         totalCurrency: "MXN",
-        rawOfferId: "mock-exp-002",
       },
       {
         id: "mock-exp-003",
+        rawOfferId: "mock-exp-003",
         airlineName: "Coco Charter",
         airlineIata: "CC",
         departureAt: `${date}T06:00:00.000Z`,
@@ -54,9 +62,10 @@ export class MockFlightProvider {
         stops: 0,
         totalAmount: 3100 * pax,
         totalCurrency: "MXN",
-        rawOfferId: "mock-exp-003",
       },
-    ].map((o) => ({
+    ];
+
+    return seeds.map((o) => ({
       ...o,
       id: `${o.id}-${origin}-${dest}${roundTrip ? "-rt" : ""}`,
       ...(roundTrip
@@ -66,7 +75,5 @@ export class MockFlightProvider {
           }
         : {}),
     }));
-
-    return offers;
   }
 }

@@ -1,50 +1,54 @@
-// @ts-nocheck — bulk-converted legacy; typed properly is M9 follow-up
 /**
  * @module employeeCategoryService
  * @description CRUD de categorías de empleado para políticas de viáticos
  * (M2-006 RF-42). Categorías ortogonales a Role (RBAC) — usadas en
- * TravelPolicy.categoryId.
- *
- * Refactor Fase 6: prisma extraído a employeeCategoryQueries.js.
+ * TravelPolicy.categoryId. Recibe el puerto de queries por DI.
  */
+import { prismaEmployeeCategoryQueries } from "~/contexts/policies/infrastructure/employeeCategoryQueries.js";
+import type { EmployeeCategoryQueriesPort } from "~/contexts/policies/domain/ports/EmployeeCategoryQueriesPort";
 import {
-  listCategoriesForOrg,
-  findCategoryById,
-  createCategoryRow,
-  updateCategoryRow,
-} from "~/contexts/policies/infrastructure/employeeCategoryQueries.js";
+  httpError,
+  type CategoryPayload,
+  type EmployeeCategoryRow,
+  type HttpError,
+} from "~/contexts/policies/domain/types";
 
-/**
- * Lists categories for an organization. By default returns only active rows.
- * @param {bigint | number} organizationId
- * @param {{ activeOnly?: boolean }} [opts]
- * @returns {Promise<Array>}
- */
-export async function listCategories(organizationId, opts = {}) {
-  return listCategoriesForOrg(organizationId, opts);
+export interface EmployeeCategoryServiceDeps {
+  queries: EmployeeCategoryQueriesPort;
 }
 
-/**
- * Reads one category by id (scoped to org).
- * @param {number} categoryId
- * @param {bigint | number} organizationId
- * @returns {Promise<Object | null>}
- */
-export async function getCategory(categoryId, organizationId) {
-  const row = await findCategoryById(categoryId);
+const defaultDeps: EmployeeCategoryServiceDeps = {
+  queries: prismaEmployeeCategoryQueries,
+};
+
+/** Lists categories for an organization. By default returns only active rows. */
+export async function listCategories(
+  organizationId: bigint | number,
+  opts: { activeOnly?: boolean } = {},
+  deps: EmployeeCategoryServiceDeps = defaultDeps,
+): Promise<EmployeeCategoryRow[]> {
+  return deps.queries.listCategoriesForOrg(organizationId, opts);
+}
+
+/** Reads one category by id (scoped to org). */
+export async function getCategory(
+  categoryId: number,
+  organizationId: bigint | number,
+  deps: EmployeeCategoryServiceDeps = defaultDeps,
+): Promise<EmployeeCategoryRow | null> {
+  const row = await deps.queries.findCategoryById(categoryId);
   if (!row || String(row.organizationId) !== String(organizationId)) return null;
   return row;
 }
 
-/**
- * Creates a new category. Maps unique-violation to status 409.
- * @param {bigint | number} organizationId
- * @param {{ code: string, name: string, description?: string }} payload
- * @returns {Promise<Object>}
- */
-export async function createCategory(organizationId, payload) {
+/** Creates a new category. Maps unique-violation to status 409. */
+export async function createCategory(
+  organizationId: bigint | number,
+  payload: CategoryPayload,
+  deps: EmployeeCategoryServiceDeps = defaultDeps,
+): Promise<EmployeeCategoryRow> {
   try {
-    return await createCategoryRow({
+    return await deps.queries.createCategoryRow({
       organizationId,
       code: String(payload.code).trim(),
       name: String(payload.name).trim(),
@@ -52,50 +56,45 @@ export async function createCategory(organizationId, payload) {
       active: true,
     });
   } catch (err) {
-    if (err.code === "P2002") {
-      const e = new Error(`Categoría con code "${payload.code}" ya existe en esta organización.`);
-      e.status = 409;
-      throw e;
+    if ((err as { code?: string }).code === "P2002") {
+      throw httpError(
+        `Categoría con code "${payload.code}" ya existe en esta organización.`,
+        409,
+      );
     }
-    throw err;
+    throw err as HttpError;
   }
 }
 
-/**
- * Updates a category. Org-scoped.
- * @param {number} categoryId
- * @param {bigint | number} organizationId
- * @param {{ name?: string, description?: string, active?: boolean }} payload
- * @returns {Promise<Object>}
- */
-export async function updateCategory(categoryId, organizationId, payload) {
-  const existing = await getCategory(categoryId, organizationId);
+/** Updates a category. Org-scoped. */
+export async function updateCategory(
+  categoryId: number,
+  organizationId: bigint | number,
+  payload: CategoryPayload,
+  deps: EmployeeCategoryServiceDeps = defaultDeps,
+): Promise<EmployeeCategoryRow> {
+  const existing = await getCategory(categoryId, organizationId, deps);
   if (!existing) {
-    const err = new Error(`Categoría ${categoryId} no encontrada.`);
-    err.status = 404;
-    throw err;
+    throw httpError(`Categoría ${categoryId} no encontrada.`, 404);
   }
-  const data = {};
+  const data: Partial<Pick<EmployeeCategoryRow, "name" | "description" | "active">> = {};
   if (payload.name !== undefined) data.name = String(payload.name).trim();
   if (payload.description !== undefined)
     data.description = payload.description ? String(payload.description).trim() : null;
   if (payload.active !== undefined) data.active = Boolean(payload.active);
 
-  return updateCategoryRow(categoryId, data);
+  return deps.queries.updateCategoryRow(categoryId, data);
 }
 
-/**
- * Soft-deletes a category (active=false). Org-scoped.
- * @param {number} categoryId
- * @param {bigint | number} organizationId
- * @returns {Promise<Object>}
- */
-export async function deactivateCategory(categoryId, organizationId) {
-  const existing = await getCategory(categoryId, organizationId);
+/** Soft-deletes a category (active=false). Org-scoped. */
+export async function deactivateCategory(
+  categoryId: number,
+  organizationId: bigint | number,
+  deps: EmployeeCategoryServiceDeps = defaultDeps,
+): Promise<EmployeeCategoryRow> {
+  const existing = await getCategory(categoryId, organizationId, deps);
   if (!existing) {
-    const err = new Error(`Categoría ${categoryId} no encontrada.`);
-    err.status = 404;
-    throw err;
+    throw httpError(`Categoría ${categoryId} no encontrada.`, 404);
   }
-  return updateCategoryRow(categoryId, { active: false });
+  return deps.queries.updateCategoryRow(categoryId, { active: false });
 }

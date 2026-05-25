@@ -23,8 +23,6 @@ import {
   getTravelRequestDetail,
   listTravelRequestsByDeptStatus,
 } from "~/contexts/travel-requests";
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore — JS module: pending hexagonal refactor en platform/permissions
 import { loadEffectivePermissions } from "~/platform/permissions/permission-service.server.js";
 
 import { jsonOk, jsonError, jsonFromError } from "~/platform/http/responses.js";

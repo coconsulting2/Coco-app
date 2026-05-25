@@ -5,7 +5,7 @@
  * Table header — eyebrow-style column labels with sort indicators.
  */
 
-import type { TableColumn } from "@components/Table/DataTable";
+import type { TableColumn } from "~/shared/ui/Table/DataTable";
 
 type SortDirection = "asc" | "desc" | null;
 

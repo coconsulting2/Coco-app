@@ -1,8 +1,10 @@
 /**
  * @module refunds (slice public API)
  * @description Convertido a TS en sesión D — cero `@ts-ignore` aquí.
- * `applyRefundContext` mantiene un `@ts-ignore` local apuntando a
- * `policies/policyService.js` mientras ese slice se migra (sesión H).
+ * `applyRefundContext` ya importa `policies/policyService` (slice TS) sin
+ * supresiones. El dispatcher `interface/api/refundsApi.server` mantiene un
+ * `@ts-ignore` heredado en la ruta `/refunds/exceptions` (propiedad del lane
+ * de policies / PolicyException, sesión H).
  */
 
 export type { RefundRule } from "~/contexts/refunds/domain/entities/RefundRule.js";
@@ -50,3 +52,48 @@ export {
   type RefundDashboardData,
   type RefundHistoryRow,
 } from "~/contexts/refunds/application/refundDashboardService.js";
+
+// ── Plazo de comprobación (admin UI) — composition root hex ───────────────
+export type {
+  ReimbursementTimeRepository,
+  ReimbursementTimeLimitRow,
+  ReimbursementTimeLimitUpsert,
+} from "~/contexts/refunds/domain/ports/ReimbursementTimeRepository.js";
+export {
+  InvalidRefundTimeLimitError,
+  DEFAULT_DAYS_AFTER_TRIP,
+  DEFAULT_GRACE_DAYS,
+  DEFAULT_BLOCK_ON_EXPIRY,
+  type RefundTimeLimit,
+  type SetRefundTimeLimitInput,
+  type ManageRefundTimeLimitDeps,
+} from "~/contexts/refunds/application/manageRefundTimeLimit.js";
+
+import * as manageRefundTimeLimitModule from "~/contexts/refunds/application/manageRefundTimeLimit.js";
+import { PrismaReimbursementTimeRepository } from "~/contexts/refunds/infrastructure/PrismaReimbursementTimeRepository.js";
+
+const defaultReimbursementTimeRepo = new PrismaReimbursementTimeRepository();
+
+/** Use-case pre-wired: lee la config del plazo de comprobación de la org. */
+export const getRefundTimeLimit = (organizationId: bigint | number) =>
+  manageRefundTimeLimitModule.getRefundTimeLimit(organizationId, {
+    timeRepo: defaultReimbursementTimeRepo,
+  });
+
+/** Use-case pre-wired: persiste la config del plazo de comprobación de la org. */
+export const setRefundTimeLimit = (
+  organizationId: bigint | number,
+  input: manageRefundTimeLimitModule.SetRefundTimeLimitInput,
+  updatedById: number | null,
+) =>
+  manageRefundTimeLimitModule.setRefundTimeLimit(organizationId, input, updatedById, {
+    timeRepo: defaultReimbursementTimeRepo,
+  });
+
+/** Raw use-cases + adapter (para tests con stubs / composiciones custom). */
+export const refundTimeLimitUsecases = {
+  getRefundTimeLimit: manageRefundTimeLimitModule.getRefundTimeLimit,
+  setRefundTimeLimit: manageRefundTimeLimitModule.setRefundTimeLimit,
+} as const;
+
+export { PrismaReimbursementTimeRepository } from "~/contexts/refunds/infrastructure/PrismaReimbursementTimeRepository.js";

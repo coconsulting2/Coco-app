@@ -1,7 +1,6 @@
 import { useState, useRef, useEffect } from "react";
-import { apiRequest } from "@utils/apiClient";
-import { clearSessionCookies } from "@data/cookies";
-import { clearPermissionCache } from "@stores/permissionStore";
+import { useFetcher } from "react-router";
+import { clearPermissionCache } from "~/shared/stores/permissionStore";
 
 interface LogoutButtonProps {
   children?: React.ReactNode;
@@ -11,14 +10,17 @@ export default function LogoutButton({ children }: LogoutButtonProps) {
   const [showConfirm, setShowConfirm] = useState(false);
   const confirmRef = useRef<HTMLDivElement>(null);
 
-  const handleLogout = async () => {
-    try {
-      await apiRequest("/user/logout", { method: "GET" });
-    } finally {
-      clearSessionCookies();
-      clearPermissionCache();
-    }
-    window.location.href = "/login";
+  /**
+   * El logout es server-side: la `action` de la ruta `/logout` emite los
+   * Set-Cookie que invalidan la sesión (httpOnly + legacy) y redirige a
+   * `/login`. Aquí solo limpiamos la cache de permisos en sessionStorage.
+   */
+  const fetcher = useFetcher();
+  const submitting = fetcher.state !== "idle";
+
+  const handleLogout = () => {
+    clearPermissionCache();
+    fetcher.submit(null, { method: "post", action: "/logout" });
   };
 
   useEffect(() => {
@@ -47,9 +49,10 @@ export default function LogoutButton({ children }: LogoutButtonProps) {
           <div className="flex gap-2">
             <button
               onClick={handleLogout}
-              className="flex-1 bg-red-600 text-white py-2 rounded-lg hover:bg-red-700 transition-colors font-semibold"
+              disabled={submitting}
+              className="flex-1 bg-red-600 text-white py-2 rounded-lg hover:bg-red-700 transition-colors font-semibold disabled:opacity-60"
             >
-              Cerrar Sesión
+              {submitting ? "Cerrando…" : "Cerrar Sesión"}
             </button>
           </div>
         </div>

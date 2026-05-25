@@ -8,17 +8,40 @@ import { jsonOk, jsonError, jsonFromError } from "~/platform/http/responses";
 import { requirePermissions, runInTenant } from "~/platform/session/requireUser.server";
 import { assertCsrf } from "~/platform/csrf/csrf.server";
 
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore — JS module
 import * as organizationService from "~/contexts/organizations/application/organizationService.js";
+import type {
+  CreateOrganizationInput,
+  UpdateOrganizationPatch,
+} from "~/contexts/organizations/application/organizationService.js";
 
 type DispatchArgs = { request: Request; subpath: string };
 
-const ROUTES: Array<{ method: string; pattern: RegExp; handler: (m: RegExpMatchArray, ctx: any) => Promise<unknown> }> = [
-  { method: "GET", pattern: /^$/, handler: async (m, { session, body }) => organizationService.listOrganizations() },
-  { method: "GET", pattern: /^(\d+)$/, handler: async (m, { session, body }) => organizationService.getOrganization(BigInt(m[1])) },
-  { method: "POST", pattern: /^$/, handler: async (m, { session, body }) => organizationService.createOrganization(body) },
-  { method: "PUT", pattern: /^(\d+)$/, handler: async (m, { session, body }) => organizationService.updateOrganization(BigInt(m[1]), body) },
+type HandlerCtx = { body: unknown };
+
+type RouteEntry = {
+  method: string;
+  pattern: RegExp;
+  handler: (m: RegExpMatchArray, ctx: HandlerCtx) => Promise<unknown>;
+};
+
+const ROUTES: RouteEntry[] = [
+  { method: "GET", pattern: /^$/, handler: async () => organizationService.listOrganizations() },
+  { method: "GET", pattern: /^(\d+)$/, handler: async (m) => organizationService.getOrganization(BigInt(m[1]!)) },
+  {
+    method: "POST",
+    pattern: /^$/,
+    handler: async (_m, { body }) =>
+      organizationService.createOrganization(body as CreateOrganizationInput),
+  },
+  {
+    method: "PUT",
+    pattern: /^(\d+)$/,
+    handler: async (m, { body }) =>
+      organizationService.updateOrganization(
+        BigInt(m[1]!),
+        body as UpdateOrganizationPatch,
+      ),
+  },
 ];
 
 export async function dispatchOrganizationsApi({ request, subpath }: DispatchArgs): Promise<Response> {
@@ -36,7 +59,7 @@ export async function dispatchOrganizationsApi({ request, subpath }: DispatchArg
       }
       const body = (method !== "GET" && method !== "HEAD") ? await readJson(request) : null;
       const result = await runInTenant(session, async () =>
-        r.handler(m, { session, body }),
+        r.handler(m, { body }),
       );
       return jsonOk(result ?? { ok: true });
     }
@@ -46,7 +69,7 @@ export async function dispatchOrganizationsApi({ request, subpath }: DispatchArg
   }
 }
 
-async function readJson(request: Request): Promise<any | null> {
+async function readJson(request: Request): Promise<unknown> {
   try {
     const text = await request.text();
     if (!text) return null;

@@ -1,14 +1,22 @@
 /**
  * AccountingExportPanel — Exportación contable para ERP (M1-010).
  *
- * Consulta GET /api/export/contable y muestra vista previa. El backend devuelve
- * pólizas en formato SAP (header + detalle con SHKZG, AMT_DOCCUR, GL_ACCOUNT…);
- * aquí se normalizan a la forma de presentación.
+ * Prop-driven: recibe `data` del loader de `routes/_app/exportar-contable.tsx`
+ * (pólizas en formato SAP: header + detalle con SHKZG, AMT_DOCCUR, GL_ACCOUNT…)
+ * y las normaliza a la forma de presentación. El filtro de rango usa
+ * `<Form method="get">` (loader-driven, RR7). La descarga JSON usa `useFetcher`
+ * contra la `action` de la ruta. Sin `apiRequest`/`fetch('/api/...')`/`token`.
  */
 
-import { useCallback, useRef, useState, type SVGProps } from "react";
-import Button from "@components/Button";
-import Toast from "@components/Toast";
+import { useEffect, useRef, useState, type SVGProps } from "react";
+import { Form, useFetcher, useNavigation } from "react-router";
+import Button from "~/shared/ui/Button";
+import Toast from "~/shared/ui/Toast";
+import type { AccountingPoliza } from "~/contexts/accounts-payable";
+import type {
+  ExportarContableActionData,
+  ExportarContableLoaderData,
+} from "~/routes/_app/exportar-contable";
 
 interface PolizaHeader {
   ID_VIAJE?: string;
@@ -40,10 +48,6 @@ interface PolizaDetalle {
   costCenter?: string;
   assignment?: string;
   itemText?: string;
-}
-
-interface ExportResponse {
-  polizas: Poliza[];
 }
 
 /* ── Iconos SVG (currentColor); no dependen de la fuente Material Icons ── */
@@ -129,16 +133,6 @@ function IconJson({ className, ...rest }: SVGProps<SVGSVGElement>) {
   );
 }
 
-function todayISO(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-
-function thirtyDaysAgoISO(): string {
-  const d = new Date();
-  d.setDate(d.getDate() - 30);
-  return d.toISOString().slice(0, 10);
-}
-
 function formatMoney(value: number | undefined, currency = "MXN"): string {
   if (value == null || Number.isNaN(value)) return "—";
   try {
@@ -168,10 +162,7 @@ function formatTotalAmount(value: number, detalles: PolizaDetalle[]): string {
 }
 
 /** Convierte una línea SAP / mixta al modelo que usa la tabla. */
-function mapDetalleLine(
-  line: Record<string, unknown>,
-  headerCurrency: string,
-): PolizaDetalle {
+function mapDetalleLine(line: Record<string, unknown>, headerCurrency: string): PolizaDetalle {
   const shkzg = String(line.SHKZG ?? line.indicatorDebitCredit ?? "").trim();
   const amtRaw = line.AMT_DOCCUR ?? line.amountDocCurrency;
   const amt = typeof amtRaw === "number" ? amtRaw : Number(amtRaw);
@@ -196,134 +187,81 @@ function mapDetalleLine(
   };
 }
 
-/** Une respuesta del API (detalle + keys SAP) con campos útiles para UI y descarga. */
-function enrichPolizaForUi(p: Poliza, listIndex: number): Poliza {
+/** Une la póliza SAP (header + detalle) con campos útiles para UI y descarga. */
+function enrichPolizaForUi(p: AccountingPoliza, listIndex: number): Poliza {
   const header = (p.header ?? {}) as PolizaHeader;
   const headerCurrency = typeof header.CURRENCY === "string" ? header.CURRENCY : "MXN";
-  const rawLines = (p.detalle ?? p.detalles ?? []) as unknown[];
-  const lines = Array.isArray(rawLines)
-    ? rawLines.map((row) => mapDetalleLine(row as Record<string, unknown>, headerCurrency))
-    : [];
+  const rawLines = Array.isArray(p.detalle) ? p.detalle : [];
+  const lines = rawLines.map((row) =>
+    mapDetalleLine(row as unknown as Record<string, unknown>, headerCurrency),
+  );
 
   const idStr = header.ID_VIAJE != null ? String(header.ID_VIAJE).trim() : "";
-  let requestId = p.requestId;
-  if (requestId == null && idStr !== "" && !Number.isNaN(Number(idStr))) {
+  let requestId: number | undefined;
+  if (idStr !== "" && !Number.isNaN(Number(idStr))) {
     requestId = Number(idStr);
   }
 
-  const docType = String(p.docType ?? header.DOC_TYPE ?? "").trim() || "—";
-  const polizaIndex = typeof p.polizaIndex === "number" ? p.polizaIndex : listIndex;
+  const docType = String(header.DOC_TYPE ?? "").trim() || "—";
 
   return {
-    ...p,
+    header,
+    detalle: rawLines as unknown as Record<string, unknown>[],
     requestId,
     docType,
-    polizaIndex,
+    polizaIndex: listIndex,
     detalles: lines,
   };
 }
 
-export default function AccountingExportPanel() {
-  const [dateFrom, setDateFrom] = useState(thirtyDaysAgoISO);
-  const [dateTo, setDateTo] = useState(todayISO);
-  const [includeSynced, setIncludeSynced] = useState(false);
-  const [polizas, setPolizas] = useState<Poliza[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+export default function AccountingExportPanel({ data }: { data: ExportarContableLoaderData }) {
+  const navigation = useNavigation();
+  const downloadFetcher = useFetcher<ExportarContableActionData>();
+
+  const polizas: AccountingPoliza[] = data.ok ? data.result.polizas : [];
+  const from = data.ok ? data.result.from : data.from;
+  const to = data.ok ? data.result.to : data.to;
+  const includeSynced = data.force;
+  const loaderError = data.ok ? null : data.error;
+
+  const uiPolizas = polizas.map((p, i) => enrichPolizaForUi(p, i));
+
+  const isQuerying = navigation.state !== "idle" && navigation.formMethod == null;
+  const isDownloading = downloadFetcher.state !== "idle";
+
+  const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
   const [toast, setToast] = useState<{
     message: string;
     type: "success" | "error" | "info" | "warning";
     id: number;
   } | null>(null);
   const toastIdRef = useRef(0);
-  const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
-  const [fetched, setFetched] = useState(false);
 
-  const fetchPolizas = useCallback(async () => {
-    if (!dateFrom) {
-      setError("Fecha de inicio es requerida.");
-      return;
-    }
-    setLoading(true);
-    setError(null);
-    setPolizas([]);
-    setExpandedIdx(null);
+  // Toast tras una descarga JSON resuelta vía fetcher.
+  const lastHandledDownload = useRef<ExportarContableActionData | null>(null);
+  useEffect(() => {
+    const result = downloadFetcher.data;
+    if (!result || downloadFetcher.state !== "idle") return;
+    if (lastHandledDownload.current === result) return;
+    lastHandledDownload.current = result;
 
-    try {
-      const base =
-        (
-          (import.meta as unknown as { env: Record<string, string> }).env
-            ?.PUBLIC_API_BASE_URL ?? "https://localhost:3000/api"
-        ).replace(/\/$/, "");
-
-      const params = new URLSearchParams();
-      params.set("date_from", dateFrom);
-      params.set("date_to", dateTo || todayISO());
-      if (includeSynced) params.set("status", "Sincronizado");
-
-      const res = await fetch(`${base}/export/contable?${params}`, {
-        credentials: "include",
-        headers: { Accept: "application/json" },
-      });
-
-      if (!res.ok) {
-        const body = await res.text();
-        let msg = `Error ${res.status}`;
-        try {
-          const j = JSON.parse(body);
-          if (j.error) msg = j.error;
-        } catch {
-          /* not json */
-        }
-        throw new Error(msg);
-      }
-
-      const data: ExportResponse = await res.json();
-      const normalized = (data.polizas ?? []).map((p, i) => enrichPolizaForUi(p, i));
-      setPolizas(normalized);
-      setFetched(true);
-
-      if (normalized.length === 0) {
-        toastIdRef.current += 1;
-        setToast({
-          message: "No se encontraron pólizas en ese rango de fechas.",
-          type: "info",
-          id: toastIdRef.current,
-        });
-      } else {
-        toastIdRef.current += 1;
-        setToast({
-          message: `${normalized.length} póliza(s) obtenida(s).`,
-          type: "success",
-          id: toastIdRef.current,
-        });
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      setError(msg);
+    if (result.ok) {
+      const blob = new Blob([result.json], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = result.filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
       toastIdRef.current += 1;
-      setToast({ message: `Error: ${msg}`, type: "error", id: toastIdRef.current });
-    } finally {
-      setLoading(false);
+      setToast({ message: "Archivo JSON descargado.", type: "success", id: toastIdRef.current });
+    } else {
+      toastIdRef.current += 1;
+      setToast({ message: `Error: ${result.error}`, type: "error", id: toastIdRef.current });
     }
-  }, [dateFrom, dateTo, includeSynced]);
-
-  const downloadJSON = useCallback(() => {
-    if (polizas.length === 0) return;
-    const blob = new Blob([JSON.stringify({ polizas }, null, 2)], {
-      type: "application/json",
-    });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `polizas_${dateFrom}_${dateTo || todayISO()}.json`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-    toastIdRef.current += 1;
-    setToast({ message: "Archivo JSON descargado.", type: "success", id: toastIdRef.current });
-  }, [polizas, dateFrom, dateTo]);
+  }, [downloadFetcher.data, downloadFetcher.state]);
 
   const toggleExpand = (idx: number) => {
     setExpandedIdx((prev) => (prev === idx ? null : idx));
@@ -333,7 +271,8 @@ export default function AccountingExportPanel() {
     <div className="w-full min-w-0 max-w-full space-y-6">
       {toast && <Toast message={toast.message} type={toast.type} key={toast.id} />}
 
-      <section
+      <Form
+        method="get"
         className="rounded-[var(--radius-lg)] border border-[var(--color-neutral-200)] bg-[var(--color-surface-white)] p-4 sm:p-5 shadow-[var(--shadow-sm)]"
         aria-label="Filtros de exportación"
       >
@@ -349,9 +288,10 @@ export default function AccountingExportPanel() {
             </label>
             <input
               id="export-date-from"
+              name="date_from"
               type="date"
-              value={dateFrom}
-              onChange={(e) => setDateFrom(e.target.value)}
+              defaultValue={from}
+              required
               className="w-full min-w-0 border border-[var(--color-neutral-300)] rounded-[var(--radius-md)] px-3 py-2.5 text-sm bg-[var(--color-surface-white)] text-[var(--color-ink)] focus:outline-none focus:ring-2 focus:ring-primary-200 focus:border-primary-400"
             />
           </div>
@@ -364,9 +304,9 @@ export default function AccountingExportPanel() {
             </label>
             <input
               id="export-date-to"
+              name="date_to"
               type="date"
-              value={dateTo}
-              onChange={(e) => setDateTo(e.target.value)}
+              defaultValue={to}
               className="w-full min-w-0 border border-[var(--color-neutral-300)] rounded-[var(--radius-md)] px-3 py-2.5 text-sm bg-[var(--color-surface-white)] text-[var(--color-ink)] focus:outline-none focus:ring-2 focus:ring-primary-200 focus:border-primary-400"
             />
           </div>
@@ -374,9 +314,10 @@ export default function AccountingExportPanel() {
           <div className="flex min-h-[44px] min-w-0 items-center gap-3 sm:col-span-2 lg:col-span-5">
             <input
               id="export-include-synced"
+              name="status"
               type="checkbox"
-              checked={includeSynced}
-              onChange={(e) => setIncludeSynced(e.target.checked)}
+              value="Sincronizado"
+              defaultChecked={includeSynced}
               className="size-5 shrink-0 cursor-pointer rounded border-[var(--color-neutral-300)] text-primary-500 focus:ring-2 focus:ring-primary-200 focus:ring-offset-0"
             />
             <label
@@ -388,15 +329,8 @@ export default function AccountingExportPanel() {
           </div>
 
           <div className="flex min-w-0 flex-wrap items-center gap-2 sm:col-span-2 lg:col-span-3 lg:justify-end">
-            <Button
-              type="button"
-              variant="filled"
-              color="primary"
-              size="big"
-              onClick={fetchPolizas}
-              disabled={loading}
-            >
-              {loading ? (
+            <Button type="submit" variant="filled" color="primary" size="big" disabled={isQuerying}>
+              {isQuerying ? (
                 <span className="inline-flex items-center justify-center gap-2.5">
                   <span
                     className="inline-block size-5 shrink-0 border-2 border-white border-t-transparent rounded-full animate-spin"
@@ -411,33 +345,36 @@ export default function AccountingExportPanel() {
                 </span>
               )}
             </Button>
-
-            {polizas.length > 0 && (
-              <Button
-                type="button"
-                variant="border"
-                color="primary"
-                size="big"
-                onClick={downloadJSON}
-              >
-                <span className="inline-flex items-center justify-center gap-2.5">
-                  <IconDownload className="size-5 shrink-0" aria-hidden />
-                  <span className="text-base leading-none font-semibold">Descargar JSON</span>
-                </span>
-              </Button>
-            )}
           </div>
         </div>
-      </section>
+      </Form>
 
-      {error && (
+      {uiPolizas.length > 0 && (
+        <downloadFetcher.Form method="post" className="flex justify-end">
+          <input type="hidden" name="_csrf" value={data.csrfToken} />
+          <input type="hidden" name="intent" value="download-json" />
+          <input type="hidden" name="date_from" value={from} />
+          <input type="hidden" name="date_to" value={to} />
+          {includeSynced && <input type="hidden" name="status" value="Sincronizado" />}
+          <Button type="submit" variant="border" color="primary" size="big" disabled={isDownloading}>
+            <span className="inline-flex items-center justify-center gap-2.5">
+              <IconDownload className="size-5 shrink-0" aria-hidden />
+              <span className="text-base leading-none font-semibold">
+                {isDownloading ? "Generando…" : "Descargar JSON"}
+              </span>
+            </span>
+          </Button>
+        </downloadFetcher.Form>
+      )}
+
+      {loaderError && (
         <div className="rounded-[var(--radius-md)] border border-accent-400 bg-accent-50 p-4 text-sm text-accent-500 flex items-start gap-2.5">
           <IconAlertCircle className="size-5 shrink-0 mt-0.5 text-accent-500" aria-hidden />
-          <span>{error}</span>
+          <span>{loaderError}</span>
         </div>
       )}
 
-      {fetched && polizas.length === 0 && !error && (
+      {!loaderError && uiPolizas.length === 0 && (
         <div
           role="status"
           className="block w-full min-w-0 rounded-[var(--radius-lg)] border border-[var(--color-neutral-200)] bg-[var(--color-surface-white)] px-4 py-8 sm:px-8 sm:py-10"
@@ -456,22 +393,20 @@ export default function AccountingExportPanel() {
         </div>
       )}
 
-      {polizas.length > 0 && (
+      {uiPolizas.length > 0 && (
         <>
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-            <KpiCard
-              label="Pólizas"
-              value={String(polizas.length)}
-              detail={`${dateFrom} → ${dateTo}`}
-            />
+            <KpiCard label="Pólizas" value={String(uiPolizas.length)} detail={`${from} → ${to}`} />
             <KpiCard
               label="Solicitudes"
-              value={String(new Set(polizas.map((p) => p.requestId).filter((id) => id != null)).size)}
+              value={String(
+                new Set(uiPolizas.map((p) => p.requestId).filter((id) => id != null)).size,
+              )}
               detail="Viajes distintos"
             />
             <KpiCard
               label="Líneas totales"
-              value={String(polizas.reduce((sum, p) => sum + (p.detalles?.length ?? 0), 0))}
+              value={String(uiPolizas.reduce((sum, p) => sum + (p.detalles?.length ?? 0), 0))}
               detail="Partidas contables"
             />
             <KpiCard label="Estado" value="Listo" detail="Vista alineada al JSON del API" variant="success" />
@@ -479,7 +414,7 @@ export default function AccountingExportPanel() {
 
           <section className="space-y-3">
             <p className="eyebrow">Vista previa de pólizas</p>
-            {polizas.map((poliza, idx) => (
+            {uiPolizas.map((poliza, idx) => (
               <PolizaCard
                 key={`${poliza.requestId}-${poliza.polizaIndex}-${idx}`}
                 poliza={poliza}
@@ -698,11 +633,7 @@ function PolizaCard({
               Ver JSON crudo (SAP)
             </summary>
             <pre className="px-4 py-3 text-[11px] leading-relaxed text-[var(--color-ink-secondary)] bg-[var(--color-surface-secondary)] overflow-x-auto max-h-[280px] border-t border-[var(--color-neutral-100)]">
-              {JSON.stringify(
-                { header: poliza.header, detalle: poliza.detalle ?? poliza.detalles },
-                null,
-                2,
-              )}
+              {JSON.stringify({ header: poliza.header, detalle: poliza.detalle }, null, 2)}
             </pre>
           </details>
         </div>

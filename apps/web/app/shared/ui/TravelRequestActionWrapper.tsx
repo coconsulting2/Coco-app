@@ -1,65 +1,70 @@
-import { useCallback, useState } from "react";
-import { apiRequest } from "@utils/apiClient";
-import ModalWrapper from "@components/ModalWrapper";
-import Toast from "@components/Toast";
+/**
+ * @module TravelRequestActionWrapper
+ * @description Botón + modal de confirmación para aprobar/rechazar una
+ * solicitud de viaje. Migrado a React Router 7: cero `apiRequest`, cero
+ * `token`, cero `window.location`. Submitea al action de la route padre vía
+ * `useFetcher` con el `intent` indicado; la action (p.ej.
+ * `autorizar-solicitud.$id`) llama al use-case del slice approvals y maneja el
+ * redirect. Paridad con el legacy authorize/decline-travel-request.
+ */
+import { useEffect, useState } from "react";
+import { useFetcher } from "react-router";
+import ModalWrapper from "~/shared/ui/ModalWrapper";
+import Toast from "~/shared/ui/Toast";
 
 interface Props {
   request_id: number;
-  endpoint: string;
-  /** ID del usuario autenticado (misma cookie `id` / sesión); la API usa :user_id, no role_id. */
-  user_id: string;
+  /** Acción a ejecutar en la route padre. */
+  intent: "approve" | "reject";
   title: string;
   message: string;
-  redirection: string;
   modal_type: "success" | "warning";
   children: React.ReactNode;
-  token: string;
+  /** Comentario obligatorio en rechazo (paridad legacy decline). */
+  comentario?: string;
 }
+
+type FetcherResult = { ok: true } | { ok: false; error: string; code?: string };
 
 export default function TravelRequestActionWrapper({
   request_id,
-  endpoint,
-  user_id,
+  intent,
   title,
   message,
-  redirection,
   modal_type,
   children,
-  token,
+  comentario,
 }: Props) {
-  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
-  const handleConfirm = useCallback(async () => {
-    try {
-      const url = `${endpoint}/${request_id}/${user_id}`;
-      await apiRequest(url, { 
-        method: "PUT",
-        headers: { Authorization: `Bearer ${token}` }
-      });
+  const fetcher = useFetcher<FetcherResult>();
+  const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
 
-      if (endpoint.includes("authorize-travel-request")) {
-        setToast({ message: 'Solicitud autorizada exitosamente.', type: 'success' });
-        await new Promise(resolve => setTimeout(resolve, 2000));
-      } else if (endpoint.includes("decline-travel-request")) {
-        setToast({ message: 'Solicitud rechazada exitosamente.', type: 'success' });
-        await new Promise(resolve => setTimeout(resolve, 2000));
-      }
-      if (redirection) {
-        window.location.href = redirection;
-      } else {
-        window.location.reload();
-      }
-    } catch (error) {
-      console.error("Error en la solicitud:", error);
-      const detail = error && typeof error === "object" && "detail" in error
-        ? (error as { detail?: { response?: { error?: string } } }).detail
-        : undefined;
-      const msg =
-        detail?.response && typeof detail.response.error === "string"
-          ? detail.response.error
-          : "No se pudo completar la acción. Intenta de nuevo.";
-      setToast({ message: msg, type: "error" });
+  const submitting = fetcher.state !== "idle";
+
+  useEffect(() => {
+    if (fetcher.state !== "idle" || !fetcher.data) return;
+    if (fetcher.data.ok) {
+      setToast({
+        message:
+          intent === "approve"
+            ? "Solicitud autorizada exitosamente."
+            : "Solicitud rechazada exitosamente.",
+        type: "success",
+      });
+    } else {
+      setToast({
+        message: fetcher.data.error ?? "No se pudo completar la acción. Intenta de nuevo.",
+        type: "error",
+      });
     }
-  }, [request_id, endpoint, redirection, user_id, token]);
+  }, [fetcher.state, fetcher.data, intent]);
+
+  const handleConfirm = () => {
+    const fd = new FormData();
+    fd.set("intent", intent);
+    fd.set("request_id", String(request_id));
+    if (intent === "reject" && comentario) fd.set("comentario", comentario);
+    fetcher.submit(fd, { method: "post" });
+  };
 
   return (
     <>
@@ -69,6 +74,7 @@ export default function TravelRequestActionWrapper({
         button_type={modal_type === "warning" ? "danger" : modal_type}
         modal_type={modal_type}
         onConfirm={handleConfirm}
+        disabled={submitting}
       >
         {children}
       </ModalWrapper>

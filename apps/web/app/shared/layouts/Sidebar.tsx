@@ -11,8 +11,8 @@ import { useEffect, useState } from "react";
 import { Link, useLocation } from "react-router";
 
 import MaterialIcon from "~/shared/ui/MaterialIcon";
-import { SIDEBAR_CONFIG, type MenuItem } from "@type/menu-config";
-import type { UserRole } from "@type/roles";
+import { SIDEBAR_CONFIG, type MenuItem } from "~/shared/types/menu-config";
+import type { UserRole } from "~/shared/types/roles";
 
 type Props = { role: UserRole };
 

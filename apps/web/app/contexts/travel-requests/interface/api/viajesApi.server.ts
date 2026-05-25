@@ -8,11 +8,7 @@ import { jsonOk, jsonError, jsonFromError } from "~/platform/http/responses";
 import { requirePermissions, runInTenant } from "~/platform/session/requireUser.server";
 import { assertCsrf } from "~/platform/csrf/csrf.server";
 
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore — JS module
 import Applicant from "~/contexts/travel-requests/infrastructure/applicantModel.js";
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore — JS module
 import GastoTramo from "~/contexts/travel-requests/infrastructure/gastoTramoModel.js";
 
 type DispatchArgs = { request: Request; subpath: string };

@@ -1,16 +1,14 @@
 /**
  * @module reembolso
  * @description Página de reembolsos del usuario. Loader DI a
- * `refundDashboardService.getRefundDashboardForUser(userId)` — pasa el resultado
- * al componente legacy `RefundDashboard` via `initialData` (skip su fetch interno).
+ * `getRefundDashboardForUser(userId)` del slice `refunds` (HEX_PROPER) — pasa
+ * el resultado al componente prop-driven `RefundDashboard`. Sin @ts-ignore.
  */
 import type { LoaderFunctionArgs } from "react-router";
 import { useLoaderData } from "react-router";
 
 import { requirePermissions, runInTenant } from "~/platform/session/requireUser.server";
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore — JS module
-import { getRefundDashboardForUser } from "~/contexts/refunds/application/refundDashboardService.js";
+import { getRefundDashboardForUser } from "~/contexts/refunds";
 
 import RefundDashboard from "~/shared/ui/RefundDashboard";
 
@@ -23,12 +21,12 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const data = await runInTenant(session, async () =>
     getRefundDashboardForUser(session.user.user_id),
   );
-  return { userId: session.user.user_id, data };
+  return { data };
 }
 
 type LoaderData = Awaited<ReturnType<typeof loader>>;
 
 export default function ReembolsoRoute() {
-  const { userId, data } = useLoaderData() as LoaderData;
-  return <RefundDashboard userId={userId} initialData={data as any} />;
+  const { data } = useLoaderData() as LoaderData;
+  return <RefundDashboard data={data} />;
 }

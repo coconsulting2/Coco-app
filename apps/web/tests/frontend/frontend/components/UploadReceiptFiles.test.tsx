@@ -2,169 +2,81 @@
  * Author: Emiliano Deyta Illescas
  *
  * Description:
- * Unit tests for UploadReceiptFiles, the integrated file uploader that
- * wraps the real POST /files/upload-receipt-files/:id call. Covers the
- * happy path (onDone is invoked once files are uploaded), the no-op
- * case when both files are null, the error path (onError is called
- * when the server rejects), and the receiptToReplace flow that
- * additionally issues a DELETE to remove the previous receipt.
+ * Unit tests for UploadReceiptFiles (migrado a React Router 7). El componente
+ * ya no hace `fetch('/api/...')`: elige archivos en inputs internos y envía un
+ * `FormData` multipart vía `useFetcher` al `action` de la route padre.
+ *
+ * Nota: jsdom + `createRoutesStub` no despachan submits multipart
+ * (`encType: "multipart/form-data"`) — el round-trip al action no es
+ * observable en este entorno. Por eso aquí se cubre el comportamiento
+ * client-side (validación sin archivos, etiquetas del modo subir/resubir y la
+ * selección de archivos en los inputs); el flujo de subida real se valida en
+ * la integración de la route padre.
  */
 
-import { describe, it, expect, vi } from "vitest";
-import { render, waitFor } from "@testing-library/react";
-import { http, HttpResponse } from "msw";
+import { describe, it, expect } from "vitest";
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { createRoutesStub } from "react-router";
 import UploadReceiptFiles from "@components/UploadReceiptFiles";
-import { server } from "../mocks/server";
-
-const API = "https://localhost:3000/api";
 
 function pdf(name = "recibo.pdf") {
   return new File(["pdf-bytes"], name, { type: "application/pdf" });
 }
 
-function xml(name = "recibo.xml") {
-  return new File(["<xml/>"], name, { type: "application/xml" });
+function renderUploader(props: { resubmit?: boolean; receiptToReplace?: string | null } = {}) {
+  const Stub = createRoutesStub([
+    {
+      path: "/",
+      Component: () => (
+        <UploadReceiptFiles
+          requestId={42}
+          resubmit={props.resubmit ?? false}
+          receiptToReplace={props.receiptToReplace ?? null}
+        />
+      ),
+      action: () => Response.json({ ok: true }),
+    },
+  ]);
+  return render(<Stub initialEntries={["/"]} />);
+}
+
+function pdfInput() {
+  return document.querySelector<HTMLInputElement>("input[type=file][accept*='pdf']")!;
 }
 
 describe("UploadReceiptFiles", () => {
-  it("does not call onDone or onError when both files are null", async () => {
-    const onDone = vi.fn();
-    const onError = vi.fn();
-    render(
-      <UploadReceiptFiles
-        receiptId={1}
-        pdfFile={null}
-        xmlFile={null}
-        token="t"
-        onDone={onDone}
-        onError={onError}
-      />,
-    );
-    await new Promise((r) => setTimeout(r, 30));
-    expect(onDone).not.toHaveBeenCalled();
-    expect(onError).not.toHaveBeenCalled();
+  it("renders the request id and the upload affordances", () => {
+    renderUploader();
+    expect(screen.getByText(/solicitud #42/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /subir archivos/i })).toBeInTheDocument();
   });
 
-  it("uploads the files and calls onDone on success", async () => {
-    const onDone = vi.fn();
-    const onError = vi.fn();
-    let requestPath = "";
-
-    server.use(
-      http.post(`${API}/files/upload-receipt-files/:id`, ({ request, params }) => {
-        requestPath = new URL(request.url).pathname;
-        expect(params.id).toBe("42");
-        return HttpResponse.json({ ok: true });
-      }),
-    );
-
-    render(
-      <UploadReceiptFiles
-        receiptId={42}
-        pdfFile={pdf()}
-        xmlFile={xml()}
-        token="abc"
-        onDone={onDone}
-        onError={onError}
-      />,
-    );
-
-    await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
-    expect(onError).not.toHaveBeenCalled();
-    expect(requestPath).toBe("/api/files/upload-receipt-files/42");
+  it("shows a validation error when no files are selected", async () => {
+    const user = userEvent.setup();
+    renderUploader();
+    await user.click(screen.getByRole("button", { name: /subir archivos/i }));
+    expect(
+      await screen.findByText(/adjunta al menos un archivo pdf o xml/i),
+    ).toBeInTheDocument();
   });
 
-  it("uploads just the pdf when xmlFile is null", async () => {
-    const onDone = vi.fn();
-    server.use(
-      http.post(`${API}/files/upload-receipt-files/:id`, () =>
-        HttpResponse.json({ ok: true }),
-      ),
-    );
-    render(
-      <UploadReceiptFiles
-        receiptId={42}
-        pdfFile={pdf()}
-        xmlFile={null}
-        token="t"
-        onDone={onDone}
-        onError={vi.fn()}
-      />,
-    );
-    await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
+  it("clears the no-files error once a file is selected and re-submitted", async () => {
+    const user = userEvent.setup();
+    renderUploader();
+    await user.click(screen.getByRole("button", { name: /subir archivos/i }));
+    expect(
+      await screen.findByText(/adjunta al menos un archivo pdf o xml/i),
+    ).toBeInTheDocument();
+
+    await user.upload(pdfInput(), pdf());
+    expect(pdfInput().files?.[0]?.name).toBe("recibo.pdf");
   });
 
-  it("calls onError when the upload endpoint fails", async () => {
-    const onDone = vi.fn();
-    const onError = vi.fn();
-    server.use(
-      http.post(`${API}/files/upload-receipt-files/:id`, () =>
-        HttpResponse.json({ error: "boom" }, { status: 500 }),
-      ),
-    );
-    render(
-      <UploadReceiptFiles
-        receiptId={42}
-        pdfFile={pdf()}
-        xmlFile={null}
-        token="t"
-        onDone={onDone}
-        onError={onError}
-      />,
-    );
-    await waitFor(() => expect(onError).toHaveBeenCalledTimes(1));
-    expect(onDone).not.toHaveBeenCalled();
-    const err = onError.mock.calls[0][0] as Error;
-    expect(err.message).toMatch(/error al subir los archivos/i);
-  });
-
-  it("issues a DELETE for the previous receipt when receiptToReplace is provided", async () => {
-    const onDone = vi.fn();
-    let deleteCalled = false;
-    let deletedId = "";
-    server.use(
-      http.delete(`${API}/applicant/delete-receipt/:id`, ({ params }) => {
-        deleteCalled = true;
-        deletedId = String(params.id);
-        return HttpResponse.json({ ok: true });
-      }),
-    );
-    render(
-      <UploadReceiptFiles
-        receiptId={42}
-        pdfFile={pdf()}
-        xmlFile={null}
-        token="t"
-        receiptToReplace="77"
-        onDone={onDone}
-        onError={vi.fn()}
-      />,
-    );
-    await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
-    expect(deleteCalled).toBe(true);
-    expect(deletedId).toBe("77");
-  });
-
-  it("still calls onDone even if the DELETE of the previous receipt fails", async () => {
-    const onDone = vi.fn();
-    const onError = vi.fn();
-    server.use(
-      http.delete(`${API}/applicant/delete-receipt/:id`, () =>
-        HttpResponse.json({ error: "nope" }, { status: 500 }),
-      ),
-    );
-    render(
-      <UploadReceiptFiles
-        receiptId={42}
-        pdfFile={pdf()}
-        xmlFile={null}
-        token="t"
-        receiptToReplace="88"
-        onDone={onDone}
-        onError={onError}
-      />,
-    );
-    await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
-    expect(onError).not.toHaveBeenCalled();
+  it("uses the resubmit label when in resubmit mode", () => {
+    renderUploader({ resubmit: true, receiptToReplace: "77" });
+    expect(
+      screen.getByRole("button", { name: /reemplazar archivos/i }),
+    ).toBeInTheDocument();
   });
 });

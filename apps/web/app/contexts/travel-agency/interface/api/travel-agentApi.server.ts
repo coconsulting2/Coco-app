@@ -1,13 +1,13 @@
-// @ts-nocheck — dispatcher legacy bound to pre-hex services; M9 follow-up
 /**
  * @module travel-agentApi.server
  * @description Dispatcher /api/travel-agent/* — preservado para el contrato
  * Swagger M1. Para flujos in-app nuevos, prefiere actions/loaders directos
  * (DI) — ver `apps/web/app/routes/_app/atender-solicitud.$id.tsx`.
  *
- * `attend-request` migrado al use-case hexagonal `markAttendedByAgency`.
- * Los endpoints `selected-flight` y `selected-hotel` reusan los use-cases
- * de los slices `flights` y `hotels`.
+ * Paridad legacy (`travelAgentController.js`):
+ *   - PUT attend-request/:id           → markAttendedByAgency
+ *   - PUT travel-request/:id/selected-flight → selectFlightOffer (slice flights)
+ *   - PUT travel-request/:id/selected-hotel  → selectStayOffer  (slice hotels)
  */
 import { jsonOk, jsonError, jsonFromError } from "~/platform/http/responses";
 import { requirePermissions, runInTenant } from "~/platform/session/requireUser.server";
@@ -15,9 +15,6 @@ import { assertCsrf } from "~/platform/csrf/csrf.server";
 import { markAttendedByAgency } from "~/contexts/travel-agency";
 import { selectFlightOffer } from "~/contexts/flights";
 import { selectStayOffer } from "~/contexts/hotels";
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore — JS module
-import TravelAgent from "~/contexts/travel-agency/infrastructure/travelAgentModel.js";
 
 type DispatchArgs = { request: Request; subpath: string };
 
@@ -31,12 +28,6 @@ const ROUTES: Array<{
   pattern: RegExp;
   handler: (m: RegExpMatchArray, ctx: DispatchCtx) => Promise<unknown>;
 }> = [
-  {
-    method: "GET",
-    pattern: /^requests(?:\/(\d+))?(?:\/(\d+))?$/,
-    handler: async (m) =>
-      TravelAgent.getRequests(Number(m[1]) || null, Number(m[2]) || null),
-  },
   {
     method: "PUT",
     pattern: /^attend-request\/(\d+)$/,

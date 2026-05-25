@@ -1,144 +1,132 @@
 /**
  * Author: Hector Lugo
- * Description: NotificationPreferences component for the user profile page (M3-006).
- * Toggle switches for Email, In-App, and Browser (Web Push) notifications.
+ * Description: NotificationPreferences para el perfil (M3-006), migrado a RR7.
+ *
+ * Data por loader (resource route `/api/notifications/preferences/:userId`)
+ * consumida vía `useFetcher` — CERO `fetch('/api/...')` ni `apiRequest`. Mutación
+ * de preferencias y suscripción Web Push también por `useFetcher` contra las
+ * resource routes del slice (PUT preferences / GET vapid-public-key / POST
+ * subscribe), incluyendo el token CSRF (`_csrf`) leído de la cookie `coco_csrf`.
+ *
+ * Decisión Web Push (regla 4): las APIs del navegador (vapid-public-key /
+ * subscribe) se sirven como resource route RR7 (no fetch a backend externo). La
+ * registración del Service Worker (`navigator.serviceWorker.register`) y
+ * `Notification.requestPermission` / `pushManager.subscribe` son APIs del
+ * navegador client-side, NO fetch a `/api/*`.
  */
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
+import { useFetcher } from "react-router";
 
-interface Prefs {
-  emailNotif: boolean;
-  appNotif: boolean;
-  browserNotif: boolean;
-}
+import type { NotificationPreferences } from "~/contexts/notifications/index.js";
+
+type Prefs = Pick<NotificationPreferences, "emailNotif" | "appNotif" | "browserNotif">;
 
 interface Props {
-  userId: string;
+  userId: number | string;
+  initialPrefs?: Prefs;
 }
 
-/**
- * Resolves the API base URL using the same logic as apiClient.ts.
- * Supports Docker (API_URL_SSR) and browser (PUBLIC_API_BASE_URL) environments.
- */
-function resolveApiBase(): string {
-  const isBrowser = typeof window !== "undefined";
-  if (!isBrowser && typeof process !== "undefined" && process.env.API_URL_SSR) {
-    return String(process.env.API_URL_SSR).replace(/\/$/, "");
-  }
-  return (import.meta.env?.PUBLIC_API_BASE_URL || "https://localhost:3000/api").replace(/\/$/, "");
+const CSRF_COOKIE = "coco_csrf";
+
+/** Lee la cookie CSRF (no httpOnly) en el navegador. SSR-safe (devuelve ""). */
+function readCsrfToken(): string {
+  if (typeof document === "undefined") return "";
+  const match = document.cookie
+    .split("; ")
+    .find((row) => row.startsWith(`${CSRF_COOKIE}=`));
+  return match ? decodeURIComponent(match.slice(CSRF_COOKIE.length + 1)) : "";
 }
 
-async function getCsrf(base: string): Promise<string> {
-  try {
-    const res = await fetch(`${base}/user/csrf-token`, {
-      credentials: "include",
-    });
-    const data = await res.json();
-    return data.csrfToken || "";
-  } catch {
-    return "";
-  }
-}
+const DEFAULT_PREFS: Prefs = { emailNotif: true, appNotif: true, browserNotif: true };
 
-export default function NotificationPreferences({ userId }: Props) {
-  const [prefs, setPrefs] = useState<Prefs>({
-    emailNotif: true,
-    appNotif: true,
-    browserNotif: true,
-  });
-  const [saving, setSaving] = useState(false);
+export default function NotificationPreferences({ userId, initialPrefs }: Props) {
+  const prefsUrl = `/api/notifications/preferences/${userId}`;
+  const prefsFetcher = useFetcher<NotificationPreferences>();
+  const saveFetcher = useFetcher<NotificationPreferences>();
+  const vapidFetcher = useFetcher<{ key: string }>();
+  const subscribeFetcher = useFetcher();
+
+  const [prefs, setPrefs] = useState<Prefs>(initialPrefs ?? DEFAULT_PREFS);
   const [pushPermission, setPushPermission] = useState<string>("default");
-  const base = resolveApiBase();
+  const saving = saveFetcher.state !== "idle";
 
+  // Carga inicial de preferencias (si no llegaron por prop).
   useEffect(() => {
     if (!userId) return;
-    fetch(`${base}/notifications/preferences/${userId}`, {
-      credentials: "include",
-    })
-      .then((res) => res.json())
-      .then((data: Prefs) =>
-        setPrefs({
-          emailNotif: data.emailNotif ?? true,
-          appNotif: data.appNotif ?? true,
-          browserNotif: data.browserNotif ?? true,
-        })
-      )
-      .catch((err) => console.error("Error loading preferences:", err));
-
-    if ("Notification" in window) {
+    if (!initialPrefs) prefsFetcher.load(prefsUrl);
+    if (typeof window !== "undefined" && "Notification" in window) {
       setPushPermission(Notification.permission);
     }
-  }, [userId, base]);
+  }, [userId, initialPrefs, prefsUrl, prefsFetcher]);
 
-  const updatePref = async (key: keyof Prefs, value: boolean) => {
-    const next = { ...prefs, [key]: value };
-    setPrefs(next);
-    setSaving(true);
-    try {
-      const csrf = await getCsrf(base);
-      await fetch(`${base}/notifications/preferences/${userId}`, {
-        method: "PUT",
-        credentials: "include",
-        headers: {
-          "Content-Type": "application/json",
-          ...(csrf ? { "csrf-token": csrf } : {}),
-        },
-        body: JSON.stringify({ [key]: value }),
+  // Sincroniza al recibir data de la resource route.
+  useEffect(() => {
+    if (prefsFetcher.state === "idle" && prefsFetcher.data) {
+      const d = prefsFetcher.data;
+      setPrefs({
+        emailNotif: d.emailNotif ?? true,
+        appNotif: d.appNotif ?? true,
+        browserNotif: d.browserNotif ?? true,
       });
-
-      // If enabling browser notifications, trigger the push subscription flow
-      if (key === "browserNotif" && value) {
-        await requestPushPermission();
-      }
-    } catch (err) {
-      console.error("Error updating preference:", err);
-      // revert
-      setPrefs((prev) => ({ ...prev, [key]: !value }));
-    } finally {
-      setSaving(false);
     }
-  };
+  }, [prefsFetcher.state, prefsFetcher.data]);
 
-  const requestPushPermission = async () => {
-    if (!("Notification" in window) || !("serviceWorker" in navigator)) {
+  // Cuando llega la VAPID key, dispara la suscripción del navegador.
+  const subscribeWithVapid = useCallback(
+    async (vapidKey: string) => {
+      if (!vapidKey) return;
+      if (
+        typeof window === "undefined" ||
+        !("serviceWorker" in navigator) ||
+        !("PushManager" in window)
+      ) {
+        return;
+      }
+      try {
+        const registration = await navigator.serviceWorker.register("/sw.js");
+        await navigator.serviceWorker.ready;
+        const subscription = await registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: vapidKey,
+        });
+        subscribeFetcher.submit(
+          { _csrf: readCsrfToken(), subscription: JSON.stringify(subscription.toJSON()) },
+          { method: "post", action: "/api/notifications/subscribe" },
+        );
+      } catch (err) {
+        console.error("Error subscribing to push:", err);
+      }
+    },
+    [subscribeFetcher],
+  );
+
+  useEffect(() => {
+    if (vapidFetcher.state === "idle" && vapidFetcher.data?.key) {
+      void subscribeWithVapid(vapidFetcher.data.key);
+    }
+  }, [vapidFetcher.state, vapidFetcher.data, subscribeWithVapid]);
+
+  const requestPushPermission = useCallback(async () => {
+    if (typeof window === "undefined" || !("Notification" in window) || !("serviceWorker" in navigator)) {
       console.warn("Push notifications not supported in this browser");
       return;
     }
-
     const permission = await Notification.requestPermission();
     setPushPermission(permission);
-
     if (permission !== "granted") return;
+    // Pide la VAPID key vía resource route; el efecto de arriba completa la suscripción.
+    vapidFetcher.load("/api/notifications/vapid-public-key");
+  }, [vapidFetcher]);
 
-    try {
-      // Get VAPID key from backend
-      const vapidRes = await fetch(`${base}/notifications/vapid-public-key`, {
-        credentials: "include",
-      });
-      const { key } = await vapidRes.json();
-      if (!key) return;
-
-      // Register service worker and subscribe
-      const registration = await navigator.serviceWorker.register("/sw.js");
-      await navigator.serviceWorker.ready;
-
-      const subscription = await registration.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: key,
-      });
-
-      // Send subscription to backend
-      const csrf = await getCsrf(base);
-      await fetch(`${base}/notifications/subscribe`, {
-        method: "POST",
-        credentials: "include",
-        headers: {
-          "Content-Type": "application/json",
-          ...(csrf ? { "csrf-token": csrf } : {}),
-        },
-        body: JSON.stringify({ subscription: subscription.toJSON() }),
-      });
-    } catch (err) {
-      console.error("Error subscribing to push:", err);
+  const updatePref = (key: keyof Prefs, value: boolean) => {
+    const next = { ...prefs, [key]: value };
+    setPrefs(next);
+    saveFetcher.submit(
+      { _csrf: readCsrfToken(), [key]: String(value) },
+      { method: "put", action: prefsUrl },
+    );
+    if (key === "browserNotif" && value) {
+      void requestPushPermission();
     }
   };
 
@@ -202,12 +190,13 @@ export default function NotificationPreferences({ userId }: Props) {
                   fontWeight: 500,
                 }}
               >
-                ⚠ Permiso bloqueado en el navegador. Habilítalo desde la configuración del sitio.
+                Permiso bloqueado en el navegador. Habilítalo desde la configuración del sitio.
               </p>
             )}
           </div>
           {/* Toggle switch */}
           <button
+            type="button"
             onClick={() => updatePref(item.key, !prefs[item.key])}
             disabled={saving}
             aria-label={`${prefs[item.key] ? "Desactivar" : "Activar"} ${item.label}`}
@@ -246,4 +235,3 @@ export default function NotificationPreferences({ userId }: Props) {
     </div>
   );
 }
-

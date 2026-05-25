@@ -138,6 +138,57 @@ export const findUserInOrg = (
 
 export const getUserWallet = (userId: number) => defaultUserRepo.getWallet(userId);
 
+// ── Admin: tenant roles + permissions catalog ────────────────────────────
+import { LegacyPermissionServiceAdapter } from "~/contexts/identity/infrastructure/LegacyPermissionServiceAdapter.js";
+import * as listAdminRolesCatalogModule from "~/contexts/identity/application/listAdminRolesCatalog.js";
+import * as manageTenantRolesModule from "~/contexts/identity/application/manageTenantRoles.js";
+
+const defaultTenantRolesService = new LegacyPermissionServiceAdapter();
+
+export const listAdminRolesCatalog = () =>
+  listAdminRolesCatalogModule.listAdminRolesCatalog({
+    service: defaultTenantRolesService,
+  });
+
+export const createTenantRole = (
+  input: import("~/contexts/identity/domain/ports/TenantRolesAdminService.js").CreateTenantRoleInput,
+) =>
+  manageTenantRolesModule.createTenantRole(input, {
+    service: defaultTenantRolesService,
+  });
+
+export const updateTenantRole = (
+  roleId: number,
+  input: import("~/contexts/identity/domain/ports/TenantRolesAdminService.js").UpdateTenantRoleInput,
+) =>
+  manageTenantRolesModule.updateTenantRole(roleId, input, {
+    service: defaultTenantRolesService,
+  });
+
+export const deleteTenantRole = (roleId: number) =>
+  manageTenantRolesModule.deleteTenantRole(roleId, {
+    service: defaultTenantRolesService,
+  });
+
+export type {
+  TenantRolesAdminService,
+  TenantRoleRow,
+  TenantRolePermissionRow,
+  TenantRolePermissionGroupRow,
+  TenantRoleAdminRow,
+  CreateTenantRoleInput,
+  UpdateTenantRoleInput,
+  RbacPermissionRow,
+  RbacPermissionGroupRow,
+} from "~/contexts/identity/domain/ports/TenantRolesAdminService.js";
+
+export type {
+  ListAdminRolesCatalogResult,
+  ListAdminRolesCatalogDeps,
+} from "~/contexts/identity/application/listAdminRolesCatalog.js";
+
+export type { ManageTenantRolesDeps } from "~/contexts/identity/application/manageTenantRoles.js";
+
 // ── Raw use-cases (para tests + composiciones custom) ────────────────────
 export const usecases = {
   authenticateUser: authenticateUserModule.authenticateUser,
@@ -150,6 +201,10 @@ export const usecases = {
   listUsers: manageUsersModule.listUsers,
   listUsersForAdmin: manageUsersModule.listUsersForAdmin,
   findUserInOrg: manageUsersModule.findUserInOrg,
+  listAdminRolesCatalog: listAdminRolesCatalogModule.listAdminRolesCatalog,
+  createTenantRole: manageTenantRolesModule.createTenantRole,
+  updateTenantRole: manageTenantRolesModule.updateTenantRole,
+  deleteTenantRole: manageTenantRolesModule.deleteTenantRole,
 } as const;
 
 // ── Default adapters export (para tests que quieran reusarlos) ────────────

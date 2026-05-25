@@ -4,7 +4,7 @@
  *
  * Persistencia: localStorage para que el impersonate sobreviva refresh.
  */
-import type { Organization } from "@type/organization";
+import type { Organization } from "~/shared/types/organization";
 
 const STORAGE_KEY_ORG = "coco:currentOrg";
 const STORAGE_KEY_IMPERSONATE = "coco:impersonatedOrgId";

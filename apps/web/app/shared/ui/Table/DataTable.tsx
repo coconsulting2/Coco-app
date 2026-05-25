@@ -6,10 +6,10 @@
  */
 
 import { useState, useMemo } from "react";
-import TableHeader from "@components/Table/TableHeader";
-import TableRow from "@components/Table/TableRow";
-import Pagination from "@components/Table/Pagination";
-import type { UserRole } from "@type/roles";
+import TableHeader from "~/shared/ui/Table/TableHeader";
+import TableRow from "~/shared/ui/Table/TableRow";
+import Pagination from "~/shared/ui/Table/Pagination";
+import type { UserRole } from "~/shared/types/roles";
 
 export interface TableColumn {
   key: string;

@@ -30,7 +30,14 @@ export {
 
 // ── Composition root (default deps) ───────────────────────────────────────
 import { PrismaFlightOfferRepository } from "~/contexts/flights/infrastructure/PrismaFlightOfferRepository.js";
+import {
+  getFlightProvider,
+  resolveFlightProviderMode,
+} from "~/contexts/flights/infrastructure/flightProvider.js";
+import { MockFlightProvider } from "~/contexts/flights/infrastructure/mockFlightProvider.js";
+import { Logger } from "~/platform/logger/log/logger.js";
 import * as selectFlightOfferModule from "~/contexts/flights/application/selectFlightOffer.js";
+import * as searchFlightsModule from "~/contexts/flights/application/searchFlights.js";
 
 const defaultOfferRepo = new PrismaFlightOfferRepository();
 
@@ -41,9 +48,19 @@ export const selectFlightOffer = (
     offerRepo: defaultOfferRepo,
   });
 
+/** Busca ofertas de vuelo con el proveedor configurado (`FLIGHT_PROVIDER`). */
+export const searchFlights = (input: searchFlightsModule.SearchFlightsInput) =>
+  searchFlightsModule.searchFlights(input, {
+    provider: getFlightProvider(),
+    providerLabel: resolveFlightProviderMode(),
+    mockProvider: new MockFlightProvider(),
+    logger: Logger("flights"),
+  });
+
 // ── Raw use-cases (tests + composiciones custom) ─────────────────────────
 export const usecases = {
   selectFlightOffer: selectFlightOfferModule.selectFlightOffer,
+  searchFlights: searchFlightsModule.searchFlights,
 } as const;
 
 export const adapters = {

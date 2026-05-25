@@ -9,7 +9,7 @@ import type {
   WorkflowSimulationInput,
   WorkflowSimulationResult,
   WorkflowStep,
-} from "@type/Workflow";
+} from "~/shared/types/Workflow";
 
 const N1_LIMIT = 25000;
 const N2_LIMIT = 100000;

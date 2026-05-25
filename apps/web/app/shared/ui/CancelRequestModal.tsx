@@ -1,25 +1,35 @@
-import { useState } from "react";
-import Modal from "@components/Modal";
-import { apiRequest } from "@utils/apiClient";
+/**
+ * @module CancelRequestModal
+ * @description Botón + modal de confirmación para cancelar una solicitud.
+ * Submitea `intent=cancel` al action de la route padre vía `useFetcher`
+ * (use-case hex `cancelTravelRequest`). Sin llamadas al API legacy ni token.
+ */
+import { useEffect, useState } from "react";
+import { useFetcher } from "react-router";
+import Modal from "~/shared/ui/Modal";
 
 interface Props {
   id: number;
-  disabled: boolean;
+  disabled?: boolean;
   children: React.ReactNode;
-  token: string;
 }
 
-export default function CancelRequestModal({ id, disabled = false, children, token }: Props) {
-  const [isOpen, setIsOpen] = useState(false);
+type FetcherResult = { ok: true } | { ok: false; error: string; code?: string };
 
-  const cancelRequest = async () => {
-    try {
-      await apiRequest(`/applicant/cancel-travel-request/${id}`, { method: "PUT" , headers: { Authorization: `Bearer ${token}` } });
-      window.location.reload();
-    } catch (err) {
-      console.error("Error inesperado:", err);
-    }
+export default function CancelRequestModal({ id, disabled = false, children }: Props) {
+  const [isOpen, setIsOpen] = useState(false);
+  const fetcher = useFetcher<FetcherResult>();
+
+  useEffect(() => {
+    if (fetcher.state !== "idle" || !fetcher.data) return;
     setIsOpen(false);
+  }, [fetcher.state, fetcher.data]);
+
+  const cancelRequest = () => {
+    fetcher.submit(
+      { intent: "cancel", requestId: String(id) },
+      { method: "post" },
+    );
   };
 
   return (

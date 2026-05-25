@@ -1,50 +1,54 @@
-// @ts-nocheck — legacy provider; will be removed when dispatchers delegate to @coco/integrations
 /**
- * Intenta Duffel Stays; si la cuenta no tiene Stays habilitado (403), usa mock.
+ * @module ResilientHotelProvider
+ * @description Adapter del puerto `HotelProvider`: intenta Duffel Stays y, si
+ * la cuenta no lo tiene habilitado (403), cae al mock. Paridad con el legacy
+ * `services/resilientHotelProvider.js`.
  */
-import { DuffelStaysProvider } from "./duffelStaysProvider.js";
-import { MockHotelProvider } from "./mockHotelProvider.js";
-import { isStaysAccessDeniedError } from "./duffelStaysApi.js";
+import { isStaysAccessDeniedError } from "@coco/integrations/duffel";
+import type {
+  StaySearchInputApp,
+  NormalizedStayOffer,
+  EnrichedStayOffer,
+} from "@coco/integrations/duffel";
+import { DuffelStaysProvider } from "~/contexts/hotels/infrastructure/duffelStaysProvider.js";
+import { MockHotelProvider } from "~/contexts/hotels/infrastructure/mockHotelProvider.js";
+import type {
+  HotelProvider,
+  HotelProviderLabel,
+  HotelSearchOffer,
+} from "~/contexts/hotels/domain/ports/HotelProvider.js";
+import { Logger } from "~/platform/logger/log/logger.js";
 
-/**
- *
- */
-export class ResilientHotelProvider {
-  /**
-   *
-   */
-  constructor() {
-    this._duffel = new DuffelStaysProvider();
-    this._mock = new MockHotelProvider();
-    /** @type {'duffel_stays' | 'mock' | 'mock_fallback'} */
-    this.lastProviderUsed = "duffel_stays";
-  }
+const log = Logger("hotels");
 
-  /**
-   * @param {import("./mockHotelProvider.js").HotelSearchParams} params
-   */
-  async searchOffers(params) {
+export class ResilientHotelProvider implements HotelProvider {
+  private readonly duffel = new DuffelStaysProvider();
+  private readonly mock = new MockHotelProvider();
+  lastProviderUsed: HotelProviderLabel = "duffel";
+
+  async searchOffers(params: StaySearchInputApp): Promise<HotelSearchOffer[]> {
     try {
-      const offers = await this._duffel.searchOffers(params);
-      this.lastProviderUsed = "duffel_stays";
+      const offers = await this.duffel.searchOffers(params);
+      this.lastProviderUsed = "duffel";
       return offers;
     } catch (err) {
       if (!isStaysAccessDeniedError(err)) {
         throw err;
       }
-      console.warn(
+      log.warn(
         "[hotels] Duffel Stays no está habilitado en esta cuenta (403). Usando proveedor mock.",
       );
-      const offers = await this._mock.searchOffers(params);
+      const offers = await this.mock.searchOffers(params);
       this.lastProviderUsed = "mock_fallback";
-      return offers.map((o) => ({ ...o, provider: "mock_fallback" }));
+      return offers.map((o) => ({ ...o, provider: "mock_fallback" as const }));
     }
   }
 
-  /**
-   * @param {string} searchResultId
-   */
-  async fetchAllRates(searchResultId) {
-    return this._duffel.fetchAllRates(searchResultId);
+  /** Resuelve tarifas vía Duffel Stays (solo aplica con proveedor Duffel). */
+  async fetchAllRates(
+    searchResultId: string,
+    baseOffer: NormalizedStayOffer,
+  ): Promise<EnrichedStayOffer> {
+    return this.duffel.fetchAllRates(searchResultId, baseOffer);
   }
 }

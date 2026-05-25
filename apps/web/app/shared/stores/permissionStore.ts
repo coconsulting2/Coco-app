@@ -1,21 +1,25 @@
 /**
- * In-memory + sessionStorage cache for the authenticated user's effective
- * permission set. The backend is the source of truth; this store exists so
- * every React island can call `hasPermission(...)` without refetching.
+ * In-memory + sessionStorage cache del set de permisos efectivo del usuario
+ * autenticado. La fuente de verdad es el loader RR7 (root/`_app/_layout`), que
+ * resuelve los permisos vía el use-case del slice identity y los HIDRATA aquí —
+ * CERO fetch client-side a `/api/user/me/permissions`.
  *
- * Usage:
- *   const perms = await getCachedPermissions();   // warms cache if needed
+ * Hidratación:
+ *   - El root loader expone `permissions` en su data.
+ *   - Un efecto cliente (o el provider que monta el layout) llama
+ *     `setPermissionCache(permissions)` una vez por sesión.
+ *
+ * Uso en islands:
+ *   const perms = getCachedPermissions();          // lee cache hidratada
  *   if (hasPermission(perms, "travel_request:authorize")) { ... }
  *
- * Call `clearPermissionCache()` on logout.
+ * Llama `clearPermissionCache()` en logout.
  */
-import { apiRequest } from "@utils/apiClient";
-import type { MePermissionsResponse, PermissionCode } from "@type/permissions";
+import type { PermissionCode } from "~/shared/types/permissions";
 
 const STORAGE_KEY = "coco:permissions";
 
 let cache: PermissionCode[] | null = null;
-let inflight: Promise<PermissionCode[]> | null = null;
 
 const readSessionStorage = (): PermissionCode[] | null => {
   if (typeof window === "undefined") return null;
@@ -38,7 +42,7 @@ const writeSessionStorage = (perms: PermissionCode[]): void => {
   }
 };
 
-/** Puts a freshly-loaded permission list into both caches. */
+/** Hidrata ambos caches con el set de permisos resuelto por el loader. */
 export const setPermissionCache = (perms: PermissionCode[]): void => {
   cache = perms;
   writeSessionStorage(perms);
@@ -53,28 +57,17 @@ export const clearPermissionCache = (): void => {
 };
 
 /**
- * Returns the effective permission list. Populates the cache from sessionStorage
- * on first call, or fetches `/api/user/me/permissions` if neither cache is warm.
- * Concurrent callers share a single in-flight request.
+ * Devuelve el set de permisos efectivo desde la cache (in-memory →
+ * sessionStorage). NO hace fetch: si aún no fue hidratado por el loader,
+ * devuelve `[]`. Los gates de servidor (`requirePermissions` en loaders/actions)
+ * siguen siendo la autoridad real; esta cache es solo para UX client-side.
  */
-export async function getCachedPermissions(): Promise<PermissionCode[]> {
+export function getCachedPermissions(): PermissionCode[] {
   if (cache) return cache;
-
   const fromStorage = readSessionStorage();
   if (fromStorage) {
     cache = fromStorage;
     return cache;
   }
-
-  if (!inflight) {
-    inflight = apiRequest<MePermissionsResponse>("/user/me/permissions")
-      .then((res) => {
-        setPermissionCache(res.permissions);
-        return res.permissions;
-      })
-      .finally(() => {
-        inflight = null;
-      });
-  }
-  return inflight;
+  return [];
 }

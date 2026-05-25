@@ -1,6 +1,6 @@
 import React, { useState } from "react";
-import Button from "@components/Button.tsx";
-import Modal from "@components/Modal";
+import Button from "~/shared/ui/Button.tsx";
+import Modal from "~/shared/ui/Modal";
 
 interface RequestProps {
   request_id: string;

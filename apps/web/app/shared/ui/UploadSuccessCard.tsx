@@ -6,8 +6,8 @@
  * para el usuario final. El panel dev crudo (CfdiDevPreview) se muestra
  * colapsado al fondo solo en modo desarrollo.
  */
-import type { ReceiptUploadResponse } from "@components/FileDropZone";
-import CfdiDevPreview, { isDevTaxPreviewEnabled } from "@components/CfdiDevPreview";
+import type { ReceiptUploadResponse } from "~/shared/ui/FileDropZone";
+import CfdiDevPreview, { isDevTaxPreviewEnabled } from "~/shared/ui/CfdiDevPreview";
 
 /* ── Types ── */
 

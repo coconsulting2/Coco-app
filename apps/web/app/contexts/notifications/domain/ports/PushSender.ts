@@ -1,9 +1,11 @@
 /**
  * @module PushSender
- * @description Puerto del slice. Los adapters concretos viven en
- * `infrastructure/`. Los métodos están tipados como `unknown[]` por ahora —
- * tipar fuertemente queda como hardening de Fase 6.
+ * @description Puerto del slice notifications para Web Push. Los adapters
+ * concretos viven en `infrastructure/` (envuelven la lib `web-push` + VAPID).
  */
 export interface PushSender {
-  sendWebPush(...args: unknown[]): Promise<unknown>;
+  /** Clave pública VAPID que el navegador necesita para suscribirse. */
+  getVapidPublicKey(): string;
+  /** Envía un push a todas las suscripciones registradas del usuario. */
+  sendWebPush(userId: number, message: string): Promise<void>;
 }

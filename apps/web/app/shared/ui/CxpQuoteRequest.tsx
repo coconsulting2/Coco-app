@@ -6,8 +6,8 @@
  */
 import { useEffect, useState } from "react";
 import { useFetcher } from "react-router";
-import Toast from "@components/Toast";
-import { showAppAlert } from "@utils/appAlert";
+import Toast from "~/shared/ui/Toast";
+import { showAppAlert } from "~/shared/utils/appAlert";
 
 interface Props {
   requestId: number;

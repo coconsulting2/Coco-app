@@ -1,45 +1,116 @@
-// @ts-nocheck — dispatcher legacy bound to pre-hex services; M9 follow-up
 /**
  * @module onboarding-importApi.server
- * @description Dispatcher /api/onboarding/import/*. Réplica del controller legacy.
- * Cada loader/action de RR v7 in-app debería preferir DI directo a los
- * use-cases del slice; este resource route se conserva para compatibilidad
- * con componentes legacy y contrato OpenAPI.
+ * @description Dispatcher /api/onboarding/import/*. Réplica tipada del controller
+ * legacy, delegando en los use-cases hex del slice (no toca el servicio directo).
+ * Las rutas RR7 in-app prefieren el action de `routes/_app/admin/onboarding-import.tsx`;
+ * este resource route se conserva para compatibilidad con el contrato OpenAPI.
  */
 import { jsonOk, jsonError, jsonFromError } from "~/platform/http/responses";
-import { requireSession, requirePermissions, runInTenant } from "~/platform/session/requireUser.server";
+import {
+  requireSession,
+  requirePermissions,
+  runInTenant,
+  type ResolvedSession,
+} from "~/platform/session/requireUser.server";
 import { assertCsrf } from "~/platform/csrf/csrf.server";
-
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore
-import * as onboardingImportService from "~/contexts/onboarding/application/onboardingImportService.js";
+import {
+  previewOnboardingImport,
+  applyOnboardingImport,
+  type ApplyImportOptions,
+} from "~/contexts/onboarding/index.js";
 
 type DispatchArgs = { request: Request; subpath: string };
 
-const ROUTES: Array<{ method: string; pattern: RegExp; perm: string | null; handler: (m: RegExpMatchArray, ctx: any) => Promise<unknown> | unknown }> = [
-  { method: "POST", pattern: /^users\/json$/, perm: "user:create", handler: async (m, { session, body, url }) => onboardingImportService.previewImport({ strategyLabel: 'JSON', payload: body, actingUserId: session.user.user_id }) },
-  { method: "POST", pattern: /^users\/csv$/, perm: "user:create", handler: async (_m, _ctx) => ({ status: 501, message: "CSV upload requires multipart adapter" }) },
-  { method: "POST", pattern: /^apply$/, perm: "user:create", handler: async (m, { session, body, url }) => onboardingImportService.applyImport({ previewToken: body?.previewToken, actingUserId: session.user.user_id, ...body }) },
+type HandlerCtx = {
+  session: ResolvedSession;
+  body: Record<string, unknown> | null;
+};
+
+type RouteDef = {
+  method: string;
+  pattern: RegExp;
+  perm: string | null;
+  handler: (ctx: HandlerCtx) => Promise<unknown>;
+};
+
+function actingUserId(session: ResolvedSession): number {
+  return session.user.user_id;
+}
+
+const ROUTES: RouteDef[] = [
+  {
+    method: "POST",
+    pattern: /^users\/json$/,
+    perm: "user:create",
+    handler: async ({ session, body }) => {
+      const buffer = Buffer.from(JSON.stringify(body ?? []), "utf-8");
+      return previewOnboardingImport({
+        buffer,
+        mimetype: "application/json",
+        originalname: "import.json",
+        organizationId: session.organizationId,
+        actingUserId: actingUserId(session),
+        options: { actorHasOrganizationCreate: session.user.permissionSet?.has("organization:create") },
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: /^users\/csv$/,
+    perm: "user:create",
+    handler: async () => {
+      throw new Error("La subida CSV usa el endpoint multipart del panel admin.");
+    },
+  },
+  {
+    method: "POST",
+    pattern: /^apply$/,
+    perm: "user:create",
+    handler: async ({ session, body }) => {
+      const previewToken = String(body?.previewToken ?? "");
+      if (!previewToken) throw new Error("Se requiere el campo previewToken.");
+      return applyOnboardingImport({
+        previewToken,
+        organizationId: session.organizationId,
+        actingUserId: actingUserId(session),
+        options: extractApplyOptions(body),
+      });
+    },
+  },
 ];
+
+function extractApplyOptions(body: Record<string, unknown> | null): ApplyImportOptions {
+  const b = body ?? {};
+  const obj = (v: unknown): Record<string, unknown> | undefined =>
+    v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : undefined;
+
+  return {
+    roleMappings: obj(b.roleMappings) as Record<string, string> | undefined,
+    roleOverrides: obj(b.roleOverrides) as Record<string, string> | undefined,
+    permissionExtras: obj(b.permissionExtras) as Record<string, string[]> | undefined,
+    passwordGlobal: typeof b.passwordGlobal === "string" ? b.passwordGlobal : undefined,
+    passwordOverrides: obj(b.passwordOverrides) as Record<string, string> | undefined,
+    customImportRoles: obj(b.customImportRoles) as ApplyImportOptions["customImportRoles"],
+    createNewOrganization: Boolean(b.createNewOrganization),
+  };
+}
 
 export async function dispatchOnboardingImportApi({ request, subpath }: DispatchArgs): Promise<Response> {
   const method = request.method.toUpperCase();
   const path = subpath.split("?")[0] ?? "";
-  const url = new URL(request.url);
 
   try {
     for (const r of ROUTES) {
       if (r.method !== method) continue;
-      const m = path.match(r.pattern);
-      if (!m) continue;
+      if (!r.pattern.test(path)) continue;
       const session = r.perm
         ? await requirePermissions(request, r.perm)
         : await requireSession(request);
       if (method !== "GET" && method !== "HEAD") {
         await assertCsrf(request);
       }
-      const body = (method !== "GET" && method !== "HEAD") ? await readJson(request) : null;
-      const result = await runInTenant(session, async () => r.handler(m, { session, body, url }));
+      const body = method !== "GET" && method !== "HEAD" ? await readJson(request) : null;
+      const result = await runInTenant(session, async () => r.handler({ session, body }));
       return jsonOk(result ?? { ok: true });
     }
     return jsonError(404, `Unknown onboarding-import endpoint: ${method} ${path}`, "UNKNOWN_ENDPOINT");
@@ -48,11 +119,12 @@ export async function dispatchOnboardingImportApi({ request, subpath }: Dispatch
   }
 }
 
-async function readJson(request: Request): Promise<any | null> {
+async function readJson(request: Request): Promise<Record<string, unknown> | null> {
   try {
     const text = await request.text();
     if (!text) return null;
-    return JSON.parse(text);
+    const parsed: unknown = JSON.parse(text);
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : null;
   } catch {
     return null;
   }

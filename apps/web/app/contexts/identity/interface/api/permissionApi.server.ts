@@ -9,8 +9,6 @@ import { jsonOk, jsonError, jsonFromError } from "~/platform/http/responses";
 import { requireSession, requirePermissions, runInTenant } from "~/platform/session/requireUser.server";
 import { assertCsrf } from "~/platform/csrf/csrf.server";
 
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore
 import * as permissionService from "~/platform/permissions/permission-service.server.js";
 
 type DispatchArgs = { request: Request; subpath: string };

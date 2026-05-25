@@ -5,17 +5,30 @@
  * horizontal diagram with jump / escalation cues (M2-008).
  */
 
-import { useState } from "react";
-import Button from "@components/Button";
-import { apiRequest } from "@utils/apiClient";
-import { formatMxn, simulateWorkflowLocally } from "@utils/workflowSimulator";
+import { useEffect, useState } from "react";
+import { useFetcher } from "react-router";
+import Button from "~/shared/ui/Button";
 import type {
   DestinationKind,
   ExpenseType,
   WorkflowSimulationInput,
   WorkflowSimulationResult,
   WorkflowStep,
-} from "@type/Workflow";
+} from "~/shared/types/Workflow";
+
+const MXN_FORMATTER = new Intl.NumberFormat("es-MX", {
+  style: "currency",
+  currency: "MXN",
+  maximumFractionDigits: 0,
+});
+
+function formatMxn(amount: number): string {
+  return MXN_FORMATTER.format(amount);
+}
+
+type SimulatorActionData =
+  | { ok: true; result: WorkflowSimulationResult }
+  | { ok: false; error: string };
 
 const EXPENSE_OPTIONS: { value: ExpenseType; label: string }[] = [
   { value: "viaje_nacional", label: "Viaje nacional" },
@@ -30,11 +43,6 @@ const DESTINATION_OPTIONS: { value: DestinationKind; label: string }[] = [
   { value: "nacional", label: "Nacional" },
   { value: "internacional", label: "Internacional" },
 ];
-
-interface SimuladorWorkflowProps {
-  apiEndpoint?: string;
-  token?: string;
-}
 
 const STATUS_STYLE: Record<
   WorkflowStep["status"],
@@ -68,14 +76,24 @@ const INITIAL_INPUT: WorkflowSimulationInput = {
   destino: "nacional",
 };
 
-export default function SimuladorWorkflow({
-  apiEndpoint = "/workflow/simulate",
-  token,
-}: SimuladorWorkflowProps) {
+export default function SimuladorWorkflow() {
+  const fetcher = useFetcher<SimulatorActionData>();
+  const loading = fetcher.state !== "idle";
+
   const [input, setInput] = useState<WorkflowSimulationInput>(INITIAL_INPUT);
   const [result, setResult] = useState<WorkflowSimulationResult | null>(null);
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (fetcher.state !== "idle" || !fetcher.data) return;
+    if (fetcher.data.ok) {
+      setResult(fetcher.data.result);
+      setError(null);
+    } else {
+      setError(fetcher.data.error);
+      setResult(null);
+    }
+  }, [fetcher.state, fetcher.data]);
 
   const updateInput = <K extends keyof WorkflowSimulationInput>(
     key: K,
@@ -84,7 +102,7 @@ export default function SimuladorWorkflow({
     setInput((prev) => ({ ...prev, [key]: value }));
   };
 
-  const handleSimulate = async (e: React.FormEvent<HTMLFormElement>) => {
+  const handleSimulate = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setError(null);
 
@@ -94,26 +112,14 @@ export default function SimuladorWorkflow({
       return;
     }
 
-    setLoading(true);
-    try {
-      let remote: WorkflowSimulationResult | null = null;
-      try {
-        remote = await apiRequest<WorkflowSimulationResult>(apiEndpoint, {
-          method: "POST",
-          data: input,
-          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-        });
-      } catch (err) {
-        console.warn("[SimuladorWorkflow] API unavailable, using local rules", err);
-      }
-      setResult(remote ?? simulateWorkflowLocally(input));
-    } catch (err) {
-      console.error(err);
-      setError("No se pudo simular el flujo. Intenta de nuevo.");
-      setResult(null);
-    } finally {
-      setLoading(false);
-    }
+    fetcher.submit(
+      {
+        monto: String(input.monto),
+        tipo_gasto: input.tipo_gasto,
+        destino: input.destino,
+      },
+      { method: "post" }
+    );
   };
 
   const handleReset = () => {

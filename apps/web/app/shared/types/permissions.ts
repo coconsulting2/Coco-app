@@ -1,4 +1,4 @@
-import type { UserRole } from "@type/roles";
+import type { UserRole } from "~/shared/types/roles";
 
 /**
  * Canonical permission code in the form `resource:action`.

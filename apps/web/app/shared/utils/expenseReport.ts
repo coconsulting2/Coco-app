@@ -12,7 +12,7 @@ import type {
   ExpenseReportFilters,
   ExpenseReportRow,
   ReportPeriod,
-} from "@type/ExpenseReport";
+} from "~/shared/types/ExpenseReport";
 
 export function startOfMonth(date: Date): Date {
   return new Date(date.getFullYear(), date.getMonth(), 1);

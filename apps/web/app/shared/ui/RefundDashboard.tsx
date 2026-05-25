@@ -1,31 +1,13 @@
 /**
- * RefundDashboard — núcleo del panel /reembolso (M2-006).
- *   Reemplaza la data mock con GET /api/refunds/by-user/:userId.
+ * RefundDashboard — núcleo del panel /reembolso (M2-006). Prop-driven: recibe
+ * `data` desde el loader (`getRefundDashboardForUser` del slice refunds).
  *   Muestra saldo, historial de reembolsos por solicitud y banner de plazo si aplica.
  *   Devolución de dinero efectiva (US-06 criterio 3) queda fuera de scope: pertenece a F-028 (wallet).
  */
-import { useEffect, useState } from "react";
-import { apiRequest } from "@utils/apiClient";
-
-interface HistoryRow {
-  requestId: number;
-  date: string;
-  amount: number;
-  status: number;
-  tripEndDate: string | null;
-  notes: string | null;
-  receiptCount: number;
-}
-
-interface DashboardData {
-  balance: number;
-  history: HistoryRow[];
-  pendingDeadlineWarning: string | null;
-}
+import type { RefundDashboardData } from "~/contexts/refunds";
 
 interface Props {
-  userId: number;
-  initialData?: DashboardData | null;
+  data: RefundDashboardData;
 }
 
 const formatMxn = (n: number) => new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN" }).format(n);
@@ -39,33 +21,7 @@ const STATUS_LABEL: Record<number, string> = {
 /**
  * @param {Props} props
  */
-export default function RefundDashboard(props: Props) {
-  const [data, setData] = useState<DashboardData | null>(props.initialData ?? null);
-  const [loading, setLoading] = useState(!props.initialData);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (props.initialData) return;
-    void load();
-  }, []);
-
-  async function load() {
-    setLoading(true);
-    try {
-      const r = await apiRequest<DashboardData>(`/refunds/by-user/${props.userId}`);
-      setData(r);
-      setError(null);
-    } catch (e: any) {
-      setError(e?.detail?.response?.error || "Error al cargar reembolsos.");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  if (loading) return <p>Cargando…</p>;
-  if (error) return <p style={{ color: "#B91C1C" }}>{error}</p>;
-  if (!data) return <p>Sin datos.</p>;
-
+export default function RefundDashboard({ data }: Props) {
   const totalAprobado = data.history.reduce((acc, h) => acc + h.amount, 0);
 
   return (

@@ -47,24 +47,24 @@ describe("FileDropZone", () => {
   });
 
   it("renders idle state with upload instructions", () => {
-    render(<FileDropZone token="test-token" />);
+    render(<FileDropZone />);
     expect(screen.getByText(/arrastra tus archivos aquí/i)).toBeInTheDocument();
     expect(screen.getByText(/\.pdf/)).toBeInTheDocument();
   });
 
   it("shows XML requirement text for domestic trips", () => {
-    render(<FileDropZone token="test-token" isInternational={false} />);
+    render(<FileDropZone isInternational={false} />);
     expect(screen.getByText(/\.xml/)).toBeInTheDocument();
   });
 
   it("does not mention XML for international trips", () => {
-    render(<FileDropZone token="test-token" isInternational={true} />);
+    render(<FileDropZone isInternational={true} />);
     const hint = screen.getByText(/haz clic para seleccionar/i);
     expect(hint.textContent).not.toMatch(/\.xml/);
   });
 
   it("transitions to selected state when a PDF is dropped", async () => {
-    render(<FileDropZone token="test-token" />);
+    render(<FileDropZone />);
     expect(capturedOnDrop).toBeTruthy();
 
     await act(async () => {
@@ -76,7 +76,7 @@ describe("FileDropZone", () => {
 
   it("calls onPdfChange when a PDF is dropped", async () => {
     const onPdfChange = vi.fn();
-    render(<FileDropZone token="test-token" onPdfChange={onPdfChange} />);
+    render(<FileDropZone onPdfChange={onPdfChange} />);
 
     await act(async () => {
       capturedOnDrop!([makePdf()]);
@@ -89,7 +89,7 @@ describe("FileDropZone", () => {
 
   it("calls onXmlChange when an XML is dropped", async () => {
     const onXmlChange = vi.fn();
-    render(<FileDropZone token="test-token" onXmlChange={onXmlChange} />);
+    render(<FileDropZone onXmlChange={onXmlChange} />);
 
     await act(async () => {
       capturedOnDrop!([makeXml()]);
@@ -105,7 +105,7 @@ describe("FileDropZone", () => {
     const onXmlChange = vi.fn();
     render(
       <FileDropZone
-        token="test-token"
+       
         onPdfChange={onPdfChange}
         onXmlChange={onXmlChange}
       />,
@@ -124,7 +124,7 @@ describe("FileDropZone", () => {
   });
 
   it("enters error state when a non-PDF/XML file is dropped", async () => {
-    render(<FileDropZone token="test-token" />);
+    render(<FileDropZone />);
 
     await act(async () => {
       capturedOnDrop!([makeTxt()]);
@@ -135,7 +135,7 @@ describe("FileDropZone", () => {
   });
 
   it("enters error state when no valid files are provided", async () => {
-    render(<FileDropZone token="test-token" />);
+    render(<FileDropZone />);
 
     await act(async () => {
       capturedOnDrop!([]);
@@ -145,7 +145,7 @@ describe("FileDropZone", () => {
   });
 
   it("shows a reset button after an error and can return to idle", async () => {
-    render(<FileDropZone token="test-token" />);
+    render(<FileDropZone />);
 
     await act(async () => {
       capturedOnDrop!([makeTxt()]);
@@ -159,7 +159,7 @@ describe("FileDropZone", () => {
   });
 
   it("has the correct aria-label for accessibility", () => {
-    render(<FileDropZone token="test-token" />);
+    render(<FileDropZone />);
     expect(
       screen.getByRole("button", { name: /zona de carga/i }),
     ).toBeInTheDocument();

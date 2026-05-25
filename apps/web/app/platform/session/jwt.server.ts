@@ -1,4 +1,3 @@
-// @ts-nocheck — legacy route/view props mismatch; M11 UI follow-up
 /**
  * @module jwt.server
  * @description Verificación y firma de JWT — wrapper TypeScript sobre la
@@ -16,7 +15,7 @@ import {
   ExpiredTokenError,
   InvalidTokenError,
   TokenMismatchError,
-} from "../http/errors.server.js";
+} from "~/platform/http/errors.server.js";
 
 const IS_DEV = process.env.NODE_ENV === "development";
 const MOCK_AUTH_ENABLED = IS_DEV && process.env.MOCK_AUTH === "true";

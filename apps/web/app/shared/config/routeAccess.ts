@@ -1,4 +1,4 @@
-import type { UserRole } from "@type/roles";
+import type { UserRole } from "~/shared/types/roles";
 
 /** Rutas compartidas entre administrador de cliente y super-admin Ditta (ROOT). */
 const routesAdministracion: string[] = [

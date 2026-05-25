@@ -1,112 +1,55 @@
 /**
  * AccountingAccountAdmin — CRUD view for the accounting catalog (M3-008).
  *
- * Lets the accounting admin register, edit and disable accounting accounts
- * (número, descripción, tipo Anticipos/Gastos/Acreedores, moneda).
- * Accounts already referenced by an active ExpenseTypeMapping cannot be
- * deleted; the UI surfaces this with a disabled action and a tooltip.
+ * Prop-driven: recibe las cuentas iniciales + mapeos (para bloquear el borrado
+ * de cuentas en uso) por props (precargadas en el loader de
+ * `routes/_app/admin/catalogo-contable`) y muta vía `useFetcher` contra la
+ * `action` de esa misma ruta (intents create/update/delete que invocan los
+ * use-cases hex del slice accounts-payable). Cero `apiRequest`/fetch a `/api/*`.
  *
- * Includes a CSV export that hits GET /accounting/export?format=csv when
- * available and falls back to a client-side CSV. Catalogs are scoped by
- * orgId on the server.
+ * Incluye export CSV client-side. Las cuentas referenciadas por un
+ * ExpenseTypeMapping activo no pueden eliminarse; la UI lo refleja con una
+ * acción deshabilitada y un tooltip.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import Button from "@components/Button";
-import Modal from "@components/Modal";
-import Toast from "@components/Toast";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useFetcher } from "react-router";
+import Button from "~/shared/ui/Button";
+import Modal from "~/shared/ui/Modal";
+import Toast from "~/shared/ui/Toast";
 import {
   ACCOUNT_TYPES,
   ACCOUNT_TYPE_LABEL,
   COMMON_CURRENCIES,
   getMappedAccountIds,
-} from "@type/AccountingAccount";
+} from "~/shared/types/AccountingAccount";
 import type {
   AccountingAccount,
   AccountingAccountFormErrors,
   AccountingAccountFormValues,
   AccountingAccountType,
   ExpenseTypeMapping,
-} from "@type/AccountingAccount";
-import { apiRequest } from "@utils/apiClient";
-import { downloadCsvWithBackend } from "@utils/csvExport";
+} from "~/shared/types/AccountingAccount";
+import { downloadCsvFromRows } from "~/shared/utils/csvExport";
 
 interface AccountingAccountAdminProps {
   initialData?: AccountingAccount[];
   initialMappings?: ExpenseTypeMapping[];
-  apiEndpoint?: string;
-  mappingsEndpoint?: string;
-  exportEndpoint?: string;
-  token?: string;
+  /** Token CSRF emitido por el loader; requerido por la `action`. */
+  csrfToken?: string;
 }
+
+/** Resultado tipado de la `action` de `routes/_app/admin/catalogo-contable`. */
+type AccountingAccountActionResult =
+  | { ok: true; intent: "create" | "update"; account: AccountingAccount }
+  | { ok: true; intent: "delete"; id: number }
+  | { ok: false; error: string };
 
 type Dialog =
   | { kind: "closed" }
   | { kind: "create" }
   | { kind: "edit"; account: AccountingAccount }
   | { kind: "delete"; account: AccountingAccount };
-
-const SEED_ACCOUNTS: AccountingAccount[] = [
-  {
-    accounting_account_id: 1,
-    org_id: 1,
-    account_number: "6100-001",
-    description: "Gastos de viaje · Avión",
-    type: "GASTOS",
-    currency: "MXN",
-  },
-  {
-    accounting_account_id: 2,
-    org_id: 1,
-    account_number: "6100-002",
-    description: "Gastos de viaje · Hotel",
-    type: "GASTOS",
-    currency: "MXN",
-  },
-  {
-    accounting_account_id: 3,
-    org_id: 1,
-    account_number: "1107-001",
-    description: "Anticipos a empleados",
-    type: "ANTICIPOS",
-    currency: "MXN",
-  },
-  {
-    accounting_account_id: 4,
-    org_id: 1,
-    account_number: "2102-001",
-    description: "Cuentas por pagar · Proveedores",
-    type: "ACREEDORES",
-    currency: "MXN",
-  },
-  {
-    accounting_account_id: 5,
-    org_id: 1,
-    account_number: "6100-USD-001",
-    description: "Gastos de viaje · Internacional",
-    type: "GASTOS",
-    currency: "USD",
-  },
-];
-
-const SEED_MAPPINGS: ExpenseTypeMapping[] = [
-  {
-    expense_type_mapping_id: 1,
-    org_id: 1,
-    receipt_type_id: 1,
-    cargo_account_id: 1,
-    abono_account_id: 4,
-    tax_indicator_id: 1,
-  },
-  {
-    expense_type_mapping_id: 2,
-    org_id: 1,
-    receipt_type_id: 2,
-    cargo_account_id: 2,
-    abono_account_id: 4,
-    tax_indicator_id: 1,
-  },
-];
 
 const emptyForm: AccountingAccountFormValues = {
   account_number: "",
@@ -118,67 +61,52 @@ const emptyForm: AccountingAccountFormValues = {
 export default function AccountingAccountAdmin({
   initialData,
   initialMappings,
-  apiEndpoint,
-  mappingsEndpoint,
-  exportEndpoint,
-  token,
+  csrfToken,
 }: AccountingAccountAdminProps) {
-  const [items, setItems] = useState<AccountingAccount[]>(
-    initialData ?? SEED_ACCOUNTS
-  );
-  const [mappings, setMappings] = useState<ExpenseTypeMapping[]>(
-    initialMappings ?? SEED_MAPPINGS
-  );
+  const fetcher = useFetcher<AccountingAccountActionResult>();
+  const submitting = fetcher.state !== "idle";
+  const pendingIntent = useRef<{ kind: "create" | "update" | "delete" } | null>(null);
+
+  const [items, setItems] = useState<AccountingAccount[]>(initialData ?? []);
+  const [mappings] = useState<ExpenseTypeMapping[]>(initialMappings ?? []);
   const [dialog, setDialog] = useState<Dialog>({ kind: "closed" });
   const [form, setForm] = useState<AccountingAccountFormValues>(emptyForm);
   const [errors, setErrors] = useState<AccountingAccountFormErrors>({});
-  const [submitting, setSubmitting] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [toast, setToast] = useState<
     { message: string; type: "success" | "error" } | null
   >(null);
 
+  // Reconcilia el estado local con el resultado de la action (useFetcher).
   useEffect(() => {
-    if (!apiEndpoint) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const data = await apiRequest<AccountingAccount[]>(apiEndpoint, {
-          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-        });
-        if (!cancelled && Array.isArray(data)) setItems(data);
-      } catch (err) {
-        console.warn(
-          "[AccountingAccountAdmin] fetch failed, using seed data",
-          err
-        );
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [apiEndpoint, token]);
+    if (fetcher.state !== "idle" || !fetcher.data) return;
+    const data = fetcher.data;
+    pendingIntent.current = null;
 
-  useEffect(() => {
-    if (!mappingsEndpoint) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const data = await apiRequest<ExpenseTypeMapping[]>(mappingsEndpoint, {
-          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-        });
-        if (!cancelled && Array.isArray(data)) setMappings(data);
-      } catch (err) {
-        console.warn(
-          "[AccountingAccountAdmin] mappings fetch failed, using seed data",
-          err
-        );
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [mappingsEndpoint, token]);
+    if (data.ok === false) {
+      setToast({ message: data.error, type: "error" });
+      return;
+    }
+    if (data.intent === "create") {
+      setItems((prev) => [...prev, data.account]);
+      setToast({ message: "Cuenta contable creada", type: "success" });
+      setDialog({ kind: "closed" });
+    } else if (data.intent === "update") {
+      setItems((prev) =>
+        prev.map((i) =>
+          i.accounting_account_id === data.account.accounting_account_id
+            ? data.account
+            : i,
+        ),
+      );
+      setToast({ message: "Cuenta contable actualizada", type: "success" });
+      setDialog({ kind: "closed" });
+    } else if (data.intent === "delete") {
+      setItems((prev) => prev.filter((i) => i.accounting_account_id !== data.id));
+      setToast({ message: "Cuenta contable eliminada", type: "success" });
+      setDialog({ kind: "closed" });
+    }
+  }, [fetcher.state, fetcher.data]);
 
   const mappedIds = useMemo(() => getMappedAccountIds(mappings), [mappings]);
 
@@ -217,7 +145,6 @@ export default function AccountingAccountAdmin({
   const closeDialog = () => {
     setDialog({ kind: "closed" });
     setErrors({});
-    setSubmitting(false);
   };
 
   const validate = useCallback(
@@ -256,7 +183,18 @@ export default function AccountingAccountAdmin({
     [items]
   );
 
-  const handleSubmit = async () => {
+  const submitIntent = (
+    intent: "create" | "update" | "delete",
+    fields: Record<string, string>,
+  ) => {
+    pendingIntent.current = { kind: intent };
+    fetcher.submit(
+      { _intent: intent, _csrf: csrfToken ?? "", ...fields },
+      { method: "post" },
+    );
+  };
+
+  const handleSubmit = () => {
     const editingId =
       dialog.kind === "edit" ? dialog.account.accounting_account_id : undefined;
     const normalized: AccountingAccountFormValues = {
@@ -267,87 +205,24 @@ export default function AccountingAccountAdmin({
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length > 0) return;
 
-    setSubmitting(true);
-    try {
-      if (dialog.kind === "create") {
-        const payload = {
-          account_number: normalized.account_number.trim(),
-          description: normalized.description.trim(),
-          type: normalized.type,
-          currency: normalized.currency,
-        };
-        let created: AccountingAccount | null = null;
-        if (apiEndpoint) {
-          try {
-            created = await apiRequest<AccountingAccount>(apiEndpoint, {
-              method: "POST",
-              data: payload,
-              headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-            });
-          } catch (err) {
-            console.warn(
-              "[AccountingAccountAdmin] create failed, using local state",
-              err
-            );
-          }
-        }
-        const nextId =
-          created?.accounting_account_id ??
-          items.reduce((m, i) => Math.max(m, i.accounting_account_id), 0) + 1;
-        const orgId = created?.org_id ?? items[0]?.org_id ?? 1;
-        setItems((prev) => [
-          ...prev,
-          created ?? {
-            accounting_account_id: nextId,
-            org_id: orgId,
-            ...payload,
-          },
-        ]);
-        setToast({ message: "Cuenta contable creada", type: "success" });
-      } else if (dialog.kind === "edit") {
-        const payload = {
-          account_number: normalized.account_number.trim(),
-          description: normalized.description.trim(),
-          type: normalized.type,
-          currency: normalized.currency,
-        };
-        if (apiEndpoint) {
-          try {
-            await apiRequest(
-              `${apiEndpoint}/${dialog.account.accounting_account_id}`,
-              {
-                method: "PUT",
-                data: payload,
-                headers: token
-                  ? { Authorization: `Bearer ${token}` }
-                  : undefined,
-              }
-            );
-          } catch (err) {
-            console.warn(
-              "[AccountingAccountAdmin] update failed, using local state",
-              err
-            );
-          }
-        }
-        setItems((prev) =>
-          prev.map((i) =>
-            i.accounting_account_id === dialog.account.accounting_account_id
-              ? { ...i, ...payload }
-              : i
-          )
-        );
-        setToast({ message: "Cuenta contable actualizada", type: "success" });
-      }
-      closeDialog();
-    } catch (err) {
-      console.error(err);
-      setToast({ message: "Error al guardar los cambios", type: "error" });
-      setSubmitting(false);
+    const fields = {
+      account_number: normalized.account_number.trim(),
+      description: normalized.description.trim(),
+      type: normalized.type,
+      currency: normalized.currency,
+    };
+
+    if (dialog.kind === "create") {
+      submitIntent("create", fields);
+    } else if (dialog.kind === "edit") {
+      submitIntent("update", {
+        id: String(dialog.account.accounting_account_id),
+        ...fields,
+      });
     }
   };
 
-  const handleDelete = async () => {
+  const handleDelete = () => {
     if (dialog.kind !== "delete") return;
     const id = dialog.account.accounting_account_id;
 
@@ -360,37 +235,14 @@ export default function AccountingAccountAdmin({
       closeDialog();
       return;
     }
-
-    setSubmitting(true);
-    if (apiEndpoint) {
-      try {
-        await apiRequest(`${apiEndpoint}/${id}`, {
-          method: "PUT",
-          data: { active: false },
-          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-        });
-      } catch (err) {
-        console.warn(
-          "[AccountingAccountAdmin] delete failed, using local state",
-          err
-        );
-      }
-    }
-    setItems((prev) => prev.filter((i) => i.accounting_account_id !== id));
-    setToast({ message: "Cuenta contable eliminada", type: "success" });
-    closeDialog();
+    submitIntent("delete", { id: String(id) });
   };
 
-  const handleExport = async () => {
+  const handleExport = () => {
     setExporting(true);
     try {
-      await downloadCsvWithBackend({
-        apiEndpoint: exportEndpoint,
-        entity: "accounting-accounts",
-        token,
-        filename: `cuentas-contables-${new Date()
-          .toISOString()
-          .slice(0, 10)}.csv`,
+      downloadCsvFromRows({
+        filename: `cuentas-contables-${new Date().toISOString().slice(0, 10)}.csv`,
         columns: [
           { key: "account_number", header: "Número" },
           { key: "description", header: "Descripción" },
@@ -398,7 +250,7 @@ export default function AccountingAccountAdmin({
           { key: "currency", header: "Moneda" },
           { key: "in_use", header: "En uso" },
         ],
-        fallbackRows: sortedItems.map((account) => ({
+        rows: sortedItems.map((account) => ({
           account_number: account.account_number,
           description: account.description,
           type: ACCOUNT_TYPE_LABEL[account.type],

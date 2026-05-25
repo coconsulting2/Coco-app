@@ -134,4 +134,20 @@ export class PrismaWorkflowRuleRepository implements WorkflowRuleRepository {
       throw err;
     }
   }
+
+  async toggleRule(
+    id: bigint | number,
+    organizationId: bigint,
+  ): Promise<WorkflowRule> {
+    const ruleId = typeof id === "bigint" ? id : BigInt(id);
+    const existing = await prisma.workflowRule.findFirst({
+      where: { id: ruleId, organizationId },
+    });
+    if (!existing) throw new WorkflowRuleNotFoundError();
+    const row = await prisma.workflowRule.update({
+      where: { id: ruleId },
+      data: { active: !existing.active },
+    });
+    return mapRow(row);
+  }
 }

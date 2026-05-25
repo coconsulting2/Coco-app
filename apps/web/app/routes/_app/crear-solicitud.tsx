@@ -1,20 +1,32 @@
 /**
  * @module crear-solicitud
- * @description Pantalla "Solicitar un viaje". Loader resuelve el centro de costos
- * del solicitante (DI) y el rol/permiso requerido. El formulario en sí
- * (`TravelRequestForm`) es el legacy verbatim — sigue posteando vía apiClient
- * a `/api/applicant/create-travel-request/:user_id` (resource route migrado).
- *
- * Migración a `<Form>` action está en CLEANUP_PLAN §5 (Fase 6 hardening).
+ * @description "Solicitar un viaje" — Loader resuelve permiso + centro de
+ * costos del solicitante (DI). Action recibe el payload del form (JSON en
+ * un single field) y llama al use-case hex `createTravelRequest` del slice
+ * `travel-requests` (que internamente valida policy de viáticos + persiste).
  */
-import type { LoaderFunctionArgs } from "react-router";
+import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { useLoaderData, useRouteLoaderData } from "react-router";
 
-import { requirePermissions, runInTenant } from "~/platform/session/requireUser.server";
+import {
+  requirePermissions,
+  runInRls,
+  runInTenant,
+} from "~/platform/session/requireUser.server";
+import { assertCsrf } from "~/platform/csrf/csrf.server";
 import { getCostCenterForUser } from "~/contexts/travel-requests/application/applicantQueryService.js";
+import {
+  createTravelRequest,
+  createDraftTravelRequest,
+  InvalidTravelRequestInputError,
+  TravelRequestError,
+  toCreateTravelRequestInput,
+  toCreateDraftPartial,
+  type SubmittedTravelBody,
+} from "~/contexts/travel-requests/index.js";
 
 import TravelRequestForm from "~/shared/ui/TravelRequestForm";
-import type { AppLayoutData } from "./_layout";
+import type { AppLayoutData } from "~/routes/_app/_layout";
 
 export function meta() {
   return [{ title: "Solicitar viaje — CocoConsulting" }];
@@ -22,14 +34,79 @@ export function meta() {
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const session = await requirePermissions(request, "travel_request:create");
-  // Pre-cargar centro de costos del usuario (el formulario lo necesita).
-  const costCenter = await runInTenant(session, async () =>
+  const rawCostCenter = await runInTenant(session, async () =>
     getCostCenterForUser(session.user.user_id),
   );
+  const costCenter = rawCostCenter
+    ? {
+        department_name: rawCostCenter.department_name,
+        costs_center: rawCostCenter.costs_center ?? "",
+      }
+    : null;
   return {
     userId: session.user.user_id,
     costCenter,
   };
+}
+
+export type CreateTravelRequestActionResult =
+  | { ok: true; requestId: number; redirectTo: string }
+  | { ok: false; error: string; code?: string };
+
+export async function action({ request }: ActionFunctionArgs): Promise<Response> {
+  const session = await requirePermissions(request, "travel_request:create");
+  await assertCsrf(request);
+
+  const formData = await request.formData();
+  const intent = String(formData.get("intent") ?? "create");
+  const bodyRaw = String(formData.get("body") ?? "");
+  let body: SubmittedTravelBody;
+  try {
+    body = JSON.parse(bodyRaw) as SubmittedTravelBody;
+  } catch {
+    return Response.json(
+      { ok: false, error: "Payload JSON inválido en field 'body'." } satisfies CreateTravelRequestActionResult,
+      { status: 400 },
+    );
+  }
+
+  const userId = Number(session.user.user_id);
+
+  try {
+    if (intent === "create-draft") {
+      const result = await runInRls(session, async () =>
+        createDraftTravelRequest(userId, toCreateDraftPartial(body)),
+      );
+      return Response.json(
+        { ok: true, requestId: result.requestId, redirectTo: "/solicitudes-draft" } satisfies CreateTravelRequestActionResult,
+        { status: 201 },
+      );
+    }
+
+    // intent === "create" (default)
+    const result = await runInRls(session, async () =>
+      createTravelRequest(toCreateTravelRequestInput(body, userId)),
+    );
+    const redirectTo =
+      session.user.role === "Solicitante" ? "/dashboard" : "/solicitudes-autorizador";
+    return Response.json(
+      { ok: true, requestId: result.requestId, redirectTo } satisfies CreateTravelRequestActionResult,
+      { status: 201 },
+    );
+  } catch (err) {
+    if (err instanceof Response) throw err;
+    if (err instanceof TravelRequestError || err instanceof InvalidTravelRequestInputError) {
+      return Response.json(
+        { ok: false, error: err.message, code: err.code } satisfies CreateTravelRequestActionResult,
+        { status: err.status },
+      );
+    }
+    const msg = err instanceof Error ? err.message : "No se pudo crear la solicitud.";
+    return Response.json(
+      { ok: false, error: msg } satisfies CreateTravelRequestActionResult,
+      { status: 500 },
+    );
+  }
 }
 
 export default function CrearSolicitudRoute() {
@@ -49,12 +126,10 @@ export default function CrearSolicitudRoute() {
       </header>
 
       <main className="card-editorial bg-white border border-[var(--color-neutral-200)] rounded-lg p-6 md:p-8">
-        {/* TravelRequestForm legacy: posta a /api/applicant/create-travel-request/:user_id */}
         <TravelRequestForm
-          user_id={String(data.userId)}
           mode="create"
           role={layout.user.role}
-          token=""
+          costCenter={data.costCenter}
         />
       </main>
     </section>

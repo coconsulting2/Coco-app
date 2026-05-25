@@ -1,4 +1,3 @@
-// @ts-nocheck — dispatcher legacy bound to pre-hex services; M9 follow-up
 /**
  * @module reportApi.server
  * @description Dispatcher /api/reports/*. Réplica del controller legacy.
@@ -7,17 +6,55 @@
  * con componentes legacy y contrato OpenAPI.
  */
 import { jsonOk, jsonError, jsonFromError } from "~/platform/http/responses";
-import { requireSession, requirePermissions, runInTenant } from "~/platform/session/requireUser.server";
+import {
+  requireSession,
+  requirePermissions,
+  runInTenant,
+  type ResolvedSession,
+} from "~/platform/session/requireUser.server";
 import { assertCsrf } from "~/platform/csrf/csrf.server";
 
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore
-import * as expenseReportService from "~/contexts/accounts-payable/application/expenseReportService.js";
+import { getExpensesByCC } from "~/contexts/accounts-payable/application/getExpensesByCC.js";
+import { PrismaExpenseReportQueries } from "~/contexts/accounts-payable/infrastructure/PrismaExpenseReportQueries.js";
 
 type DispatchArgs = { request: Request; subpath: string };
 
-const ROUTES: Array<{ method: string; pattern: RegExp; perm: string | null; handler: (m: RegExpMatchArray, ctx: any) => Promise<unknown> | unknown }> = [
-  { method: "GET", pattern: /^gastos-por-cc$/, perm: "report:read", handler: async (m, { session, body, url }) => expenseReportService.getExpensesByCC?.({ from: url.searchParams.get('from'), to: url.searchParams.get('to'), userId: session.user.user_id }) },
+type RequestBody = Record<string, unknown> | null;
+
+type HandlerContext = {
+  session: ResolvedSession;
+  body: RequestBody;
+  url: URL;
+};
+
+type RouteDef = {
+  method: string;
+  pattern: RegExp;
+  perm: string | null;
+  handler: (m: RegExpMatchArray, ctx: HandlerContext) => Promise<unknown> | unknown;
+};
+
+const expenseReportQueries = new PrismaExpenseReportQueries();
+
+const ROUTES: RouteDef[] = [
+  {
+    method: "GET",
+    pattern: /^gastos-por-cc$/,
+    perm: "report:read",
+    handler: async (_m, { session, url }) =>
+      getExpensesByCC(
+        {
+          orgId: Number(session.organizationId),
+          actorUserId: Number(session.user.user_id),
+          permissionSet: session.user.permissionSet,
+          query: {
+            from: url.searchParams.get("from") ?? undefined,
+            to: url.searchParams.get("to") ?? undefined,
+          },
+        },
+        { expenseReportQueries },
+      ),
+  },
 ];
 
 export async function dispatchReportApi({ request, subpath }: DispatchArgs): Promise<Response> {
@@ -36,8 +73,9 @@ export async function dispatchReportApi({ request, subpath }: DispatchArgs): Pro
       if (method !== "GET" && method !== "HEAD") {
         await assertCsrf(request);
       }
-      const body = (method !== "GET" && method !== "HEAD") ? await readJson(request) : null;
+      const body = method !== "GET" && method !== "HEAD" ? await readJson(request) : null;
       const result = await runInTenant(session, async () => r.handler(m, { session, body, url }));
+      if (result instanceof Response) return result;
       return jsonOk(result ?? { ok: true });
     }
     return jsonError(404, `Unknown report endpoint: ${method} ${path}`, "UNKNOWN_ENDPOINT");
@@ -46,11 +84,11 @@ export async function dispatchReportApi({ request, subpath }: DispatchArgs): Pro
   }
 }
 
-async function readJson(request: Request): Promise<any | null> {
+async function readJson(request: Request): Promise<RequestBody> {
   try {
     const text = await request.text();
     if (!text) return null;
-    return JSON.parse(text);
+    return JSON.parse(text) as RequestBody;
   } catch {
     return null;
   }

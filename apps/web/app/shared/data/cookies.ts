@@ -1,4 +1,4 @@
-// import type { UserRole } from "@type/roles";
+// import type { UserRole } from "~/shared/types/roles";
 
 // const mockCookies = {
 //     username: "John Doe",
@@ -11,7 +11,7 @@
 //     return mockCookies[key];
 // };
 
-import type { UserRole } from "@type/roles";
+import type { UserRole } from "~/shared/types/roles";
 
 // RR v7 reemplaza Astro.cookies. Aceptamos cualquier objeto con get(name) → { value }
 // (Astro), o get(name) → string (otros adapters). Compatibilidad mínima.

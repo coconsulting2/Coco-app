@@ -1,10 +1,16 @@
 /**
  * @module FlightProvider
- * @description Puerto del slice. Los adapters concretos viven en
- * `infrastructure/`. Los métodos están tipados como `unknown[]` por ahora —
- * tipar fuertemente queda como hardening de Fase 6.
+ * @description Puerto del slice flights. Un adapter concreto sabe buscar
+ * ofertas de vuelo (Duffel o mock). Los adapters viven en `infrastructure/`.
  */
+import type {
+  FlightSearchParams,
+  NormalizedFlightOffer,
+} from "@coco/integrations/duffel";
+
+export type { FlightSearchParams, NormalizedFlightOffer };
+
 export interface FlightProvider {
-  search(...args: unknown[]): Promise<unknown>;
-  quote(...args: unknown[]): Promise<unknown>;
+  /** Busca ofertas normalizadas para los parámetros dados. */
+  searchOffers(params: FlightSearchParams): Promise<NormalizedFlightOffer[]>;
 }

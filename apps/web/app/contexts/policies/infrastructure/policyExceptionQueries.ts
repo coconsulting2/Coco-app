@@ -1,65 +1,63 @@
-// @ts-nocheck — bulk-converted legacy; typed properly is M9 follow-up
 /**
  * @module policyExceptionQueries
- * @description Queries Prisma para PolicyException CRUD + side-effect transaccional.
- * Extracción Fase 6 desde policyExceptionService.
+ * @description Adapter Prisma del puerto PolicyExceptionQueriesPort
+ * (PolicyException CRUD + side-effect transaccional de decisión).
  */
 import prisma from "~/platform/db/prisma.server.js";
+import type {
+  DecideExceptionArgs,
+  ExceptionWithRequest,
+  PendingExceptionWithJoins,
+  PolicyExceptionQueriesPort,
+  RequestForException,
+} from "~/contexts/policies/domain/ports/PolicyExceptionQueriesPort";
+import type { PolicyExceptionRow } from "~/contexts/policies/domain/types";
 
-/**
- * @param {number} requestId
- * @returns {Promise<object | null>}
- */
-export async function findRequestForException(requestId) {
+export async function findRequestForException(
+  requestId: number,
+): Promise<RequestForException | null> {
   return prisma.request.findUnique({
     where: { requestId: Number(requestId) },
     select: { requestId: true, workflowPreSnapshot: true, userId: true, organizationId: true },
-  });
+  }) as unknown as Promise<RequestForException | null>;
 }
 
-/**
- * @param {object} data
- * @returns {Promise<object>}
- */
-export async function createPolicyException(data) {
-  return prisma.policyException.create({ data });
+export async function createPolicyException(data: {
+  organizationId: bigint | number;
+  requestId: number;
+  receiptId: number | null;
+  policyId: number | null;
+  capId: number | null;
+  amountClaimed: number;
+  amountAllowed: number | null;
+  excessAmount: number;
+  justification: string;
+  status: string;
+  requestedById: number;
+}): Promise<PolicyExceptionRow> {
+  return prisma.policyException.create({
+    data: data as never,
+  }) as unknown as Promise<PolicyExceptionRow>;
 }
 
-/**
- * @param {number} exceptionId
- * @returns {Promise<object | null>}
- */
-export async function findExceptionWithRequest(exceptionId) {
+export async function findExceptionWithRequest(
+  exceptionId: number,
+): Promise<ExceptionWithRequest | null> {
   return prisma.policyException.findUnique({
     where: { exceptionId: Number(exceptionId) },
     include: {
       request: { select: { workflowPreSnapshot: true, userId: true, organizationId: true } },
     },
-  });
+  }) as unknown as Promise<ExceptionWithRequest | null>;
 }
 
-/**
- * Side-effect transaccional: actualiza PolicyException + Receipt + inserta
- * SolicitudHistorial. Atómico.
- *
- * @param {{
- *   exceptionId: number,
- *   exceptionUpdate: object,
- *   receiptId: number | null,
- *   refundFlag: boolean,
- *   requestId: number,
- *   organizationId: bigint | number,
- *   decidedById: number,
- *   accion: string,
- *   comentario: string
- * }} args
- * @returns {Promise<object>}
- */
-export async function decideExceptionTx(args) {
+export async function decideExceptionTx(
+  args: DecideExceptionArgs,
+): Promise<PolicyExceptionRow> {
   return prisma.$transaction(async (tx) => {
     const row = await tx.policyException.update({
       where: { exceptionId: args.exceptionId },
-      data: args.exceptionUpdate,
+      data: args.exceptionUpdate as never,
     });
     if (args.receiptId) {
       await tx.receipt.update({
@@ -74,27 +72,22 @@ export async function decideExceptionTx(args) {
         userId: args.decidedById,
         accion: args.accion,
         comentario: args.comentario,
-      },
+      } as never,
     });
     return row;
-  });
+  }) as unknown as Promise<PolicyExceptionRow>;
 }
 
-/**
- * @param {number} requestId
- * @returns {Promise<object[]>}
- */
-export async function findPendingExceptionsForRequest(requestId) {
+export async function findPendingExceptionsForRequest(
+  requestId: number,
+): Promise<PolicyExceptionRow[]> {
   return prisma.policyException.findMany({
     where: { requestId: Number(requestId), status: "PENDING" },
     orderBy: [{ createdAt: "asc" }],
-  });
+  }) as unknown as Promise<PolicyExceptionRow[]>;
 }
 
-/**
- * @returns {Promise<object[]>}
- */
-export async function findAllPendingExceptions() {
+export async function findAllPendingExceptions(): Promise<PendingExceptionWithJoins[]> {
   return prisma.policyException.findMany({
     where: { status: "PENDING" },
     include: {
@@ -108,5 +101,15 @@ export async function findAllPendingExceptions() {
       request: { select: { requestId: true, userId: true, workflowPreSnapshot: true } },
     },
     orderBy: [{ createdAt: "asc" }],
-  });
+  }) as unknown as Promise<PendingExceptionWithJoins[]>;
 }
+
+/** Adapter pre-wireado del puerto PolicyExceptionQueriesPort. */
+export const prismaPolicyExceptionQueries: PolicyExceptionQueriesPort = {
+  findRequestForException,
+  createPolicyException,
+  findExceptionWithRequest,
+  decideExceptionTx,
+  findPendingExceptionsForRequest,
+  findAllPendingExceptions,
+};

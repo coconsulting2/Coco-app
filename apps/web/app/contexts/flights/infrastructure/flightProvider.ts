@@ -1,41 +1,24 @@
-// @ts-nocheck — legacy provider; will be removed when dispatchers delegate to @coco/integrations
 /**
- * Proveedor de vuelos: contrato común + selector por FLIGHT_PROVIDER (TF-010).
+ * @module flightProvider
+ * @description Selección del adapter de vuelos según `FLIGHT_PROVIDER` (TF-010).
+ * La lógica de SDK vive en `@coco/integrations/duffel`; aquí solo se elige el
+ * adapter concreto. Paridad con el legacy `services/flightProvider.js`.
  */
+import { MockFlightProvider } from "~/contexts/flights/infrastructure/mockFlightProvider.js";
+import { DuffelFlightProvider } from "~/contexts/flights/infrastructure/duffelFlightProvider.js";
+import type { FlightProvider } from "~/contexts/flights/domain/ports/FlightProvider.js";
 
-import { MockFlightProvider } from "./mockFlightProvider.js";
-import { DuffelFlightProvider } from "./duffelFlightProvider.js";
+/** Etiqueta del proveedor activo (para el contrato de respuesta). */
+export type FlightProviderLabel = "duffel" | "mock";
 
-/**
- * @typedef {Object} FlightSearchParams
- * @property {string} origin - IATA
- * @property {string} destination - IATA
- * @property {string} departureDate - YYYY-MM-DD
- * @property {string} [returnDate] - YYYY-MM-DD (vuelta; opcional)
- * @property {number} passengers
- */
+export function resolveFlightProviderMode(): FlightProviderLabel {
+  return String(process.env.FLIGHT_PROVIDER || "mock").toLowerCase() === "duffel"
+    ? "duffel"
+    : "mock";
+}
 
-/**
- * @typedef {Object} NormalizedFlightOffer
- * @property {string} id
- * @property {string} airlineName
- * @property {string} airlineIata
- * @property {string} departureAt - ISO
- * @property {string} arrivalAt - ISO
- * @property {string} durationLabel
- * @property {number} stops
- * @property {number} totalAmount
- * @property {string} totalCurrency
- * @property {string} [rawOfferId] - id proveedor (Duffel offer id)
- */
-
-/**
- *
- */
-export function getFlightProvider() {
-  const mode = String(process.env.FLIGHT_PROVIDER || "mock").toLowerCase();
-  if (mode === "duffel") {
-    return new DuffelFlightProvider();
-  }
-  return new MockFlightProvider();
+export function getFlightProvider(): FlightProvider {
+  return resolveFlightProviderMode() === "duffel"
+    ? new DuffelFlightProvider()
+    : new MockFlightProvider();
 }

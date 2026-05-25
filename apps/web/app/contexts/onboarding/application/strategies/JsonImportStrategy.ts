@@ -1,46 +1,38 @@
-// @ts-nocheck — bulk-converted legacy; typed properly is M9 follow-up
 /**
  * @module JsonImportStrategy
  * @description Strategy para importar usuarios desde JSON.
  *
  * Formato esperado (array de objetos):
  * [
- *   {
- *     "userName":   "ana.lopez",
- *     "email":      "ana.lopez@cliente.com",
- *     "password":   "Temporal123!",
- *     "roleName":   "Solicitante",
- *     "department": "Finanzas",
- *     "firstName":  "Ana",
- *     "lastName":   "López"
- *   }
+ *   { "userName": "ana.lopez", "email": "ana.lopez@cliente.com", "password": "Temporal123!",
+ *     "roleName": "Solicitante", "department": "Finanzas", "firstName": "Ana", "lastName": "López" }
  * ]
  *
  * Wrapper recomendado para JSON de otra empresa:
- * {
- *   "roleMappings": {
- *     "Approver": "Solicitante",
- *     "Finance Lead": "Cuentas por pagar"
- *   },
- *   "users": [ ... ]
- * }
+ * { "roleMappings": { "Approver": "Solicitante" }, "users": [ ... ] }
  *
  * También acepta array directo (sin roleMappings en raíz).
- * @typedef {{ nombre: string, rfc?: string|null, razonSocial?: string|null, timezone?: string, baseCurrency?: string }} OrganizationCreateSpec
  */
-import { BaseImportStrategy } from "./BaseImportStrategy.js";
+import { BaseImportStrategy } from "~/contexts/onboarding/application/strategies/BaseImportStrategy";
+import type {
+  ImportUserDTO,
+  OrganizationCreateSpec,
+  ParsedImportFile,
+} from "~/contexts/onboarding/domain/entities/ImportUser";
 
-/**
- * @param {object|null} rawRoot - Objeto raíz del JSON (no un array suelto)
- * @returns {Record<string, string>}
- */
-function extractEmbeddedMappings(rawRoot) {
+type JsonRoot = { roleMappings?: unknown; organization?: unknown; users?: unknown } & Record<
+  string,
+  unknown
+>;
+type RawRow = Record<string, unknown>;
+
+/** Extrae el mapa `roleMappings` de la raíz del JSON. */
+function extractEmbeddedMappings(rawRoot: unknown): Record<string, string> {
   if (!rawRoot || typeof rawRoot !== "object" || Array.isArray(rawRoot)) return {};
-  const rm = rawRoot.roleMappings;
+  const rm = (rawRoot as JsonRoot).roleMappings;
   if (!rm || typeof rm !== "object" || Array.isArray(rm)) return {};
-  /** @type {Record<string, string>} */
-  const out = {};
-  for (const [k, v] of Object.entries(rm)) {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(rm as Record<string, unknown>)) {
     if (typeof k === "string" && typeof v === "string" && k.trim() && v.trim()) {
       out[k.trim()] = v.trim();
     }
@@ -48,53 +40,39 @@ function extractEmbeddedMappings(rawRoot) {
   return out;
 }
 
-/**
- * Extrae datos de organización nueva desde la raíz del JSON (import onboarding).
- * @param {object|null} rawRoot
- * @returns {OrganizationCreateSpec|null}
- */
-export function extractOrganizationSpecFromJsonRoot(rawRoot) {
+/** Extrae datos de organización nueva desde la raíz del JSON (import onboarding). */
+export function extractOrganizationSpecFromJsonRoot(rawRoot: unknown): OrganizationCreateSpec | null {
   if (!rawRoot || typeof rawRoot !== "object" || Array.isArray(rawRoot)) return null;
-  const o = rawRoot.organization;
+  const o = (rawRoot as JsonRoot).organization;
   if (!o || typeof o !== "object" || Array.isArray(o)) return null;
-  const nombre = String(o.nombre ?? "").trim();
+  const org = o as Record<string, unknown>;
+  const nombre = String(org.nombre ?? "").trim();
   if (!nombre) return null;
-  const rfc = o.rfc !== undefined && o.rfc !== null && String(o.rfc).trim() ? String(o.rfc).trim() : null;
+  const rfc =
+    org.rfc !== undefined && org.rfc !== null && String(org.rfc).trim() ? String(org.rfc).trim() : null;
   const razonSocial =
-    o.razonSocial !== undefined && o.razonSocial !== null && String(o.razonSocial).trim()
-      ? String(o.razonSocial).trim()
+    org.razonSocial !== undefined && org.razonSocial !== null && String(org.razonSocial).trim()
+      ? String(org.razonSocial).trim()
       : null;
   const timezone =
-    typeof o.timezone === "string" && o.timezone.trim()
-      ? o.timezone.trim()
-      : "America/Mexico_City";
+    typeof org.timezone === "string" && org.timezone.trim() ? org.timezone.trim() : "America/Mexico_City";
   const baseCurrency =
-    typeof o.baseCurrency === "string" && o.baseCurrency.trim()
-      ? o.baseCurrency.trim()
-      : "MXN";
+    typeof org.baseCurrency === "string" && org.baseCurrency.trim() ? org.baseCurrency.trim() : "MXN";
   return { nombre, rfc, razonSocial, timezone, baseCurrency };
 }
 
-/**
- * Estrategia de importación JSON (usuarios + campos opcionales layout SAP).
- */
+/** Estrategia de importación JSON (usuarios + campos opcionales layout SAP). */
 export class JsonImportStrategy extends BaseImportStrategy {
-  /** @returns {string[]} MIME types aceptados */
-  get mimeTypes() {
+  get mimeTypes(): string[] {
     return ["application/json", "text/json"];
   }
 
-  /** @returns {string} Etiqueta para logs */
-  get label() {
+  override get label(): string {
     return "JSON";
   }
 
-  /**
-   * @param {Buffer} buffer
-   * @returns {Promise<{ rows: import('./BaseImportStrategy.js').ImportUserDTO[], embeddedRoleMappings: Record<string, string>, organizationSpec: OrganizationCreateSpec|null }>}
-   */
-  async parse(buffer) {
-    let raw;
+  async parse(buffer: Buffer): Promise<ParsedImportFile> {
+    let raw: unknown;
     try {
       raw = JSON.parse(buffer.toString("utf-8"));
     } catch {
@@ -104,11 +82,9 @@ export class JsonImportStrategy extends BaseImportStrategy {
     const embeddedRoleMappings = Array.isArray(raw) ? {} : extractEmbeddedMappings(raw);
     const organizationSpec = Array.isArray(raw) ? null : extractOrganizationSpecFromJsonRoot(raw);
 
-    const rows = Array.isArray(raw) ? raw : raw?.users;
+    const rows = Array.isArray(raw) ? raw : (raw as JsonRoot | null)?.users;
     if (!Array.isArray(rows)) {
-      throw new Error(
-        "El JSON debe ser un array de usuarios o un objeto con propiedad \"users\"."
-      );
+      throw new Error('El JSON debe ser un array de usuarios o un objeto con propiedad "users".');
     }
     if (rows.length === 0) {
       throw new Error("El archivo JSON está vacío (ningún usuario encontrado).");
@@ -121,42 +97,35 @@ export class JsonImportStrategy extends BaseImportStrategy {
     };
   }
 
-  /**
-   * @param {Record<string,unknown>} row
-   * @param {...string} keys
-   * @returns {string|undefined}
-   */
-  #pick(row, ...keys) {
+  #pick(row: RawRow, ...keys: string[]): string | undefined {
     for (const k of keys) {
-      if (row[k] !== undefined && row[k] !== null && String(row[k]).trim() !== "") return String(row[k]).trim();
+      if (row[k] !== undefined && row[k] !== null && String(row[k]).trim() !== "") {
+        return String(row[k]).trim();
+      }
     }
     return undefined;
   }
 
-  /**
-   * @param {Record<string,unknown>} row
-   * @param {number} index
-   * @returns {import('./BaseImportStrategy.js').ImportUserDTO}
-   */
-  #normalizeRow(row, index) {
+  #normalizeRow(row: unknown, index: number): ImportUserDTO {
     if (typeof row !== "object" || row === null) {
       throw new Error(`Fila ${index + 1}: se esperaba un objeto, se recibió ${typeof row}.`);
     }
-    const dto = {
-      userName: String(row.userName ?? row.username ?? "").trim(),
-      email: String(row.email ?? "").trim().toLowerCase(),
-      password: String(row.password ?? row.pass ?? "").trim(),
-      roleName: String(row.roleName ?? row.role ?? row.profile ?? "").trim(),
-      department: String(row.department ?? row.dept ?? "").trim() || undefined,
-      firstName: String(row.firstName ?? row.first_name ?? "").trim() || undefined,
-      lastName: String(row.lastName ?? row.last_name ?? "").trim() || undefined,
+    const r = row as RawRow;
+    const dto: ImportUserDTO = {
+      userName: String(r.userName ?? r.username ?? "").trim(),
+      email: String(r.email ?? "").trim().toLowerCase(),
+      password: String(r.password ?? r.pass ?? "").trim(),
+      roleName: String(r.roleName ?? r.role ?? r.profile ?? "").trim(),
+      department: String(r.department ?? r.dept ?? "").trim() || undefined,
+      firstName: String(r.firstName ?? r.first_name ?? "").trim() || undefined,
+      lastName: String(r.lastName ?? r.last_name ?? "").trim() || undefined,
     };
-    const noEmpleado = this.#pick(row, "noEmpleado", "no_empleado", "employee_id", "emp_id");
-    const sapProveedor = this.#pick(row, "sapProveedor", "proveedor", "vendor_no", "vendor_number");
-    const sapCeco = this.#pick(row, "sapCeco", "ceco", "cost_center");
-    const managerNoEmpleado = this.#pick(row, "managerNoEmpleado", "jefe_inmediato", "jefeInmediato", "manager_id");
-    const managerUserName = this.#pick(row, "managerUserName", "manager_username", "reports_to", "manager");
-    const sapStatus = this.#pick(row, "sapStatus", "status");
+    const noEmpleado = this.#pick(r, "noEmpleado", "no_empleado", "employee_id", "emp_id");
+    const sapProveedor = this.#pick(r, "sapProveedor", "proveedor", "vendor_no", "vendor_number");
+    const sapCeco = this.#pick(r, "sapCeco", "ceco", "cost_center");
+    const managerNoEmpleado = this.#pick(r, "managerNoEmpleado", "jefe_inmediato", "jefeInmediato", "manager_id");
+    const managerUserName = this.#pick(r, "managerUserName", "manager_username", "reports_to", "manager");
+    const sapStatus = this.#pick(r, "sapStatus", "status");
     if (noEmpleado) dto.noEmpleado = noEmpleado;
     if (sapProveedor) dto.sapProveedor = sapProveedor;
     if (sapCeco) dto.sapCeco = sapCeco;

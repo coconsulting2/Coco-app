@@ -1,37 +1,30 @@
-// @ts-nocheck — legacy route/view props mismatch; M11 UI follow-up
 /**
- * ReceiptItem — Wrapper React que maneja el estado local de un comprobante
- * Envuelve ReceiptDetailCard + ReceiptActions y mantiene validation sincronizado
- * (avoiding un-necessary reloads and providing context per comprobante)
+ * @module ReceiptItem
+ * @description Wrapper React que combina `ReceiptDetailCard` (presentational)
+ * con `ReceiptActions` (Aprobar/Rechazar). Mantiene `validation` localmente
+ * para reflejar el cambio post-submit sin esperar al re-loader (que igual
+ * dispara `useFetcher` automáticamente).
  */
 
-import React, { useState } from "react";
-import ReceiptDetailCard, { type ReceiptDetailProps } from "@components/ReceiptDetailCard";
-import ReceiptActions from "@components/ReceiptActions";
+import { useState } from "react";
+import ReceiptDetailCard, { type ReceiptDetailProps } from "~/shared/ui/ReceiptDetailCard";
+import ReceiptActions from "~/shared/ui/ReceiptActions";
 
 interface ReceiptItemProps extends Omit<ReceiptDetailProps, "children"> {
   requestId: number;
   receiptTypeName: string;
-  token: string;
 }
 
 export default function ReceiptItem({
   receiptId,
   requestId,
   receiptTypeName,
-  token,
   ...cardProps
 }: ReceiptItemProps) {
-  // Validation actualizado localmente sin recargar
   const [currentValidation, setCurrentValidation] = useState(cardProps.validation);
 
-  const handleApproveSuccess = () => {
-    setCurrentValidation("Aprobado");
-  };
-
-  const handleRejectSuccess = () => {
-    setCurrentValidation("Rechazado");
-  };
+  const handleApproveSuccess = () => setCurrentValidation("Aprobado");
+  const handleRejectSuccess = () => setCurrentValidation("Rechazado");
 
   const isReviewable = currentValidation === "Pendiente";
 
@@ -40,6 +33,7 @@ export default function ReceiptItem({
       {...cardProps}
       validation={currentValidation}
       receiptId={receiptId}
+      receiptTypeName={receiptTypeName}
     >
       {isReviewable && (
         <div className="mt-3 ml-10 flex items-center gap-3">
@@ -47,7 +41,6 @@ export default function ReceiptItem({
             receipt_id={receiptId}
             request_id={requestId}
             receipt_type_name={receiptTypeName}
-            token={token}
             onApprove={handleApproveSuccess}
             onReject={handleRejectSuccess}
           />
@@ -56,6 +49,3 @@ export default function ReceiptItem({
     </ReceiptDetailCard>
   );
 }
-
-
-

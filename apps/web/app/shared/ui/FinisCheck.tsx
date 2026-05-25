@@ -1,53 +1,72 @@
-import React, { useState, useCallback } from "react";
-import Button from "@components/Button";
-import Modal from "@components/Modal";
-import ExpenseSettlementSummary from "@components/ExpenseSettlementSummary";
+/**
+ * @module FinisCheck (FinishRequestButton)
+ * @description Botón CxP "Terminar — listo para pago". Migrado a React Router 7:
+ * cero `apiRequest`, cero `token`, cero `window.location`. Submitea al action
+ * de la route padre vía `useFetcher` con `intent="finalize"`; esa action debe
+ * llamar al use-case `validateReceiptsAndUpdateStatus` del slice
+ * accounts-payable y, si procede, redirigir. Paridad 1:1 con el legacy
+ * `PUT /accounts-payable/validate-receipts/:request_id`.
+ */
+import { useEffect, useState } from "react";
+import { useFetcher } from "react-router";
+import Button from "~/shared/ui/Button";
+import Modal from "~/shared/ui/Modal";
+import ExpenseSettlementSummary from "~/shared/ui/ExpenseSettlementSummary";
 import type { ExpenseSettlement } from "~/shared/utils/expenseSettlement";
-import { apiRequest } from "@utils/apiClient";
-import { showAppAlert, showAppAlertAsync } from "@utils/appAlert";
+import { showAppAlert } from "~/shared/utils/appAlert";
 
 interface Props {
   requestId: number;
   redirectTo?: string;
-  token: string;
   settlement: ExpenseSettlement;
 }
+
+type FetcherResult = { ok: true; redirect?: string } | { ok: false; error: string };
 
 export default function FinishRequestButton({
   requestId,
   redirectTo = "/dashboard",
-  token,
   settlement,
 }: Props) {
+  const fetcher = useFetcher<FetcherResult>();
   const [confirmOpen, setConfirmOpen] = useState(false);
 
-  const finalize = useCallback(async () => {
-    try {
-      await apiRequest(`/accounts-payable/validate-receipts/${requestId}`, {
-        method: "PUT",
-        headers: { Authorization: `Bearer ${token}` },
-      });
+  const submitting = fetcher.state !== "idle";
 
-      await showAppAlertAsync(
+  useEffect(() => {
+    if (fetcher.state !== "idle" || !fetcher.data) return;
+    if (fetcher.data.ok) {
+      setConfirmOpen(false);
+      // El redirect lo maneja RR si la action devuelve `redirect(...)`; si no,
+      // mostramos confirmación in-place.
+      showAppAlert(
         "Lote marcado como listo para pago. La solicitud quedó finalizada.",
         { variant: "success" },
       );
-      window.location.href = redirectTo;
-    } catch (error) {
-      console.error("Error al finalizar la solicitud", error);
-      showAppAlert("Error al finalizar la solicitud.", { variant: "error" });
+    } else {
+      showAppAlert(fetcher.data.error ?? "Error al finalizar la solicitud.", {
+        variant: "error",
+      });
     }
-  }, [requestId, redirectTo, token]);
+  }, [fetcher.state, fetcher.data]);
 
   const allReviewed = settlement.pendingCount === 0;
   const canFinalize = allReviewed && settlement.approvedCount > 0;
+
+  const finalize = () => {
+    const fd = new FormData();
+    fd.set("intent", "finalize");
+    fd.set("requestId", String(requestId));
+    fd.set("redirectTo", redirectTo);
+    fetcher.submit(fd, { method: "post" });
+  };
 
   return (
     <>
       <Button
         color="success"
         size="medium"
-        disabled={!allReviewed}
+        disabled={!allReviewed || submitting}
         onClick={() => setConfirmOpen(true)}
       >
         Terminar — listo para pago

@@ -1,63 +1,86 @@
-// @ts-nocheck — legacy route/view props mismatch; M11 UI follow-up
 /**
  * @module gastos-por-centro
- * @description Reporte de gastos por centro de costo. Loader llama
- * directamente al service legacy (DI) — sin endpoint HTTP intermedio.
- * Render mínimo en React puro (sin componente legacy ad-hoc).
+ * @description Reporte de gastos por centro de costo. El loader consume el
+ * use-case hex tipado `getExpensesByCC` (port `ExpenseReportQueries` + adapter
+ * Prisma) dentro de `runInTenant` — sin endpoint HTTP intermedio ni
+ * `@ts-ignore`. Render mínimo en React puro, prop-driven desde el loader.
  */
 import type { LoaderFunctionArgs } from "react-router";
 import { Form, useLoaderData } from "react-router";
 
-import { requirePermissions, runInTenant } from "~/platform/session/requireUser.server";
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore — JS module
-import * as expenseReportService from "~/contexts/accounts-payable/application/expenseReportService.js";
+import {
+  requirePermissions,
+  runInTenant,
+} from "~/platform/session/requireUser.server";
+import {
+  getExpensesByCC,
+  AccountsPayableError,
+} from "~/contexts/accounts-payable";
 
 export function meta() {
   return [{ title: "Gastos por centro de costo — CocoConsulting" }];
 }
 
-export async function loader({ request }: LoaderFunctionArgs) {
+type ReportRow = {
+  costsCenter: string;
+  count: number;
+  total: number;
+};
+
+export type GastosPorCentroLoaderData = {
+  rows: ReportRow[];
+  total: number | null;
+  from: string;
+  to: string;
+};
+
+export async function loader({
+  request,
+}: LoaderFunctionArgs): Promise<GastosPorCentroLoaderData> {
   const session = await requirePermissions(request, "report:read");
   const url = new URL(request.url);
   const from = url.searchParams.get("from") ?? "";
   const to = url.searchParams.get("to") ?? "";
 
-  let rows: any[] = [];
-  let total: number | null = null;
-  if (from && to) {
-    try {
-      const result = await runInTenant(session, async () =>
-        expenseReportService.getExpensesByCC?.({
-          from,
-          to,
-          userId: session.user.user_id,
-        }),
-      );
-      if (Array.isArray(result)) {
-        rows = result;
-      } else if (result && typeof result === "object") {
-        rows = result.items ?? result.data ?? [];
-        total = result.total ?? null;
-      }
-    } catch {
-      rows = [];
-    }
+  if (!from || !to) {
+    return { rows: [], total: null, from, to };
   }
 
-  return { rows, total, from, to };
+  try {
+    const orgId = Number(session.organizationId);
+    const report = await runInTenant(session, async () =>
+      getExpensesByCC({
+        orgId,
+        actorUserId: Number(session.user.user_id),
+        permissionSet: session.user.permissionSet,
+        query: { from, to },
+      }),
+    );
+
+    // Agrega las filas (por periodo/tipo) en un total por centro de costo.
+    const byCc = new Map<string, ReportRow>();
+    for (const row of report.rows) {
+      const key = row.cost_center_code || row.cost_center_name || "—";
+      const current = byCc.get(key) ?? { costsCenter: key, count: 0, total: 0 };
+      current.count += 1;
+      current.total += row.amount;
+      byCc.set(key, current);
+    }
+    const rows = [...byCc.values()].sort((a, b) => b.total - a.total);
+    const total = rows.reduce((sum, r) => sum + r.total, 0);
+
+    return { rows, total, from, to };
+  } catch (err) {
+    if (err instanceof Response) throw err;
+    if (err instanceof AccountsPayableError) {
+      return { rows: [], total: null, from, to };
+    }
+    return { rows: [], total: null, from, to };
+  }
 }
 
-type Row = {
-  costsCenter?: string | null;
-  centroCosto?: string | null;
-  total?: number | null;
-  amount?: number | null;
-  count?: number | null;
-};
-
 export default function GastosPorCentroRoute() {
-  const data = useLoaderData() as Awaited<ReturnType<typeof loader>>;
+  const data = useLoaderData() as GastosPorCentroLoaderData;
 
   return (
     <section className="max-w-5xl mx-auto space-y-8">
@@ -99,7 +122,7 @@ export default function GastosPorCentroRoute() {
                   Centro de costo
                 </th>
                 <th className="text-left text-xs uppercase tracking-widest text-[var(--color-ink-muted)] px-4 py-3">
-                  Solicitudes
+                  Comprobantes
                 </th>
                 <th className="text-right text-xs uppercase tracking-widest text-[var(--color-ink-muted)] px-4 py-3">
                   Total
@@ -107,12 +130,12 @@ export default function GastosPorCentroRoute() {
               </tr>
             </thead>
             <tbody>
-              {(data.rows as Row[]).map((r, i) => (
+              {data.rows.map((r, i) => (
                 <tr key={i} className="border-t border-[var(--color-neutral-200)]">
-                  <td className="px-4 py-3 text-sm">{r.costsCenter ?? r.centroCosto ?? "—"}</td>
-                  <td className="px-4 py-3 text-sm">{r.count ?? "—"}</td>
+                  <td className="px-4 py-3 text-sm">{r.costsCenter}</td>
+                  <td className="px-4 py-3 text-sm">{r.count}</td>
                   <td className="px-4 py-3 text-sm text-right font-medium">
-                    {r.total != null ? `$${Number(r.total).toFixed(2)}` : r.amount != null ? `$${Number(r.amount).toFixed(2)}` : "—"}
+                    ${r.total.toFixed(2)}
                   </td>
                 </tr>
               ))}

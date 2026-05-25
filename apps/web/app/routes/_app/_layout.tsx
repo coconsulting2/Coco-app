@@ -14,11 +14,9 @@ import { Outlet, useLoaderData } from "react-router";
 
 import MainLayout from "~/shared/layouts/MainLayout";
 import { requireSession, runInTenant } from "~/platform/session/requireUser.server";
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore — JS module
 import { loadEffectivePermissions } from "~/platform/permissions/permission-service.server.js";
-import { roleLabels } from "@config/role-labels";
-import type { UserRole } from "@type/roles";
+import { roleLabels } from "~/shared/config/role-labels";
+import type { UserRole } from "~/shared/types/roles";
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const session = await requireSession(request);

@@ -1,19 +1,105 @@
-// @ts-nocheck — bulk-converted legacy; typed properly is M9 follow-up
 /**
  * @module accountsPayableModel
  * @description Data access layer for accounts payable queries using Prisma.
  */
 import prisma from "~/platform/db/prisma.server.js";
+import type { CfdiComprobante } from "@coco/db";
+
+/** Resultado de `requestExists` — réplica del shape GROUP_CONCAT legacy. */
+export interface RequestExistsResult {
+  request_id: number;
+  request_status_id: number;
+  hotel_needed_list: string;
+  plane_needed_list: string;
+}
+
+/** Resultado de `receiptExists`. */
+export interface ReceiptExistsResult {
+  receipt_id: number;
+  validation: string;
+}
+
+/** CFDI esencial expuesto por `getExpenseValidations`. */
+export interface ExpenseCfdiSummary {
+  nombreEmisor: string;
+  rfcEmisor: string;
+  fechaEmision: Date;
+  subtotal: number;
+  iva: number;
+  total: number;
+  moneda: string;
+  uuid: string;
+  satEstado: string;
+  tipoComprobante: string;
+}
+
+/** Una partida de gasto del resultado de `getExpenseValidations`. */
+export interface ExpenseValidationItem {
+  receipt_id: number;
+  receipt_type_name: string | undefined;
+  amount: number;
+  validation: string;
+  sat_estado: string | null;
+  pdf_id: string | null;
+  pdf_name: string | null;
+  xml_id: string | null;
+  xml_name: string | null;
+  cfdi: ExpenseCfdiSummary | null;
+}
+
+/** Resultado de `getExpenseValidations`. */
+export interface ExpenseValidationsResult {
+  request_id: number;
+  request_status_id: number | null;
+  request_status_name: string | null;
+  status?: string;
+  Expenses: ExpenseValidationItem[];
+}
+
+/** Recibo con CFDI para validación CPP. */
+export interface ReceiptForValidation {
+  receipt_id: number;
+  request_id: number | null;
+  validation: string;
+  receipt_type_name: string | null;
+  cfdiComprobante: CfdiComprobante | null;
+}
+
+/** Mapa código numérico → enum de validación (paridad legacy). */
+const VALIDATION_MAP: Record<number, "Pendiente" | "Aprobado" | "Rechazado"> = {
+  1: "Pendiente",
+  2: "Aprobado",
+  3: "Rechazado",
+};
+
+/** Estatus de solicitud que CxP ve en su historial (paridad controller legacy). */
+const CXP_HISTORIAL_STATUS_IDS = [7, 8];
+
+/** Fila formateada del historial CxP. */
+export interface CxpRequestListItem {
+  request_id: number;
+  request_status: string;
+  destination_country: string;
+  beginning_date: string;
+  ending_date: string;
+  requester_name: string;
+}
+
+function formatListDate(date: Date | null | undefined): string {
+  if (!date) return "—";
+  const d = new Date(date);
+  return Number.isNaN(d.getTime()) ? "—" : (d.toISOString().split("T")[0] ?? "—");
+}
 
 const AccountsPayable = {
   /**
    * Update a travel request status and imposed fee.
-   * @param {number} requestId - Identifier of the travel request.
-   * @param {number} imposedFee - Imposed fee for the request.
-   * @param {number} newStatus - New status identifier to set.
-   * @returns {Promise<boolean>} True if the update succeeded.
    */
-  async attendTravelRequest(requestId, imposedFee, newStatus) {
+  async attendTravelRequest(
+    requestId: number,
+    imposedFee: number,
+    newStatus: number,
+  ): Promise<boolean> {
     await prisma.request.update({
       where: { requestId: Number(requestId) },
       data: {
@@ -26,12 +112,9 @@ const AccountsPayable = {
 
   /**
    * Check if a request exists. Returns the request with hotel/plane info.
-   * The controller checks hotel_needed_list.includes(1) and plane_needed_list.includes(1).
-   * We replicate that shape by building comma-separated strings from route data.
-   * @param {number} requestId - Identifier of the request to check.
-   * @returns {Promise<Object|undefined>} Request record if found.
+   * Replicates the old GROUP_CONCAT comma-separated lists from route data.
    */
-  async requestExists(requestId) {
+  async requestExists(requestId: number): Promise<RequestExistsResult | undefined> {
     const request = await prisma.request.findUnique({
       where: { requestId: Number(requestId) },
       include: {
@@ -43,9 +126,8 @@ const AccountsPayable = {
 
     if (!request) return undefined;
 
-    // Build comma-separated lists matching the old GROUP_CONCAT output
-    const hotelValues = request.routeRequests.map((rr) => rr.route?.hotelNeeded ? 1 : 0);
-    const planeValues = request.routeRequests.map((rr) => rr.route?.planeNeeded ? 1 : 0);
+    const hotelValues = request.routeRequests.map((rr) => (rr.route?.hotelNeeded ? 1 : 0));
+    const planeValues = request.routeRequests.map((rr) => (rr.route?.planeNeeded ? 1 : 0));
 
     return {
       request_id: request.requestId,
@@ -57,10 +139,8 @@ const AccountsPayable = {
 
   /**
    * Get the validation statuses of receipts for a request.
-   * @param {number} requestId - Identifier of the request.
-   * @returns {Promise<Array<string>>} List of validation statuses.
    */
-  async getReceiptStatusesForRequest(requestId) {
+  async getReceiptStatusesForRequest(requestId: number): Promise<string[]> {
     const rows = await prisma.receipt.findMany({
       where: { requestId: Number(requestId) },
       select: { validation: true },
@@ -70,11 +150,8 @@ const AccountsPayable = {
 
   /**
    * Update the status of a request.
-   * @param {number} requestId - Identifier of the request to update.
-   * @param {number} statusId - New status identifier to set.
-   * @returns {Promise<void>}
    */
-  async updateRequestStatus(requestId, statusId) {
+  async updateRequestStatus(requestId: number, statusId: number): Promise<void> {
     await prisma.request.update({
       where: { requestId: Number(requestId) },
       data: { requestStatusId: Number(statusId) },
@@ -83,10 +160,8 @@ const AccountsPayable = {
 
   /**
    * Check if a receipt exists in the database.
-   * @param {number} receiptId - Identifier of the receipt to check.
-   * @returns {Promise<Object|undefined>} Receipt record if found.
    */
-  async receiptExists(receiptId) {
+  async receiptExists(receiptId: number): Promise<ReceiptExistsResult | undefined> {
     const receipt = await prisma.receipt.findUnique({
       where: { receiptId: Number(receiptId) },
       select: { receiptId: true, validation: true },
@@ -101,11 +176,11 @@ const AccountsPayable = {
   },
 
   /**
-   * Recibo con CFDI para validacion CPP (aprobacion / rechazo).
-   * @param {number} receiptId
-   * @returns {Promise<{ receipt_id: number, request_id: number, validation: string, cfdiComprobante: Object|null }|undefined>}
+   * Recibo con CFDI para validación CPP (aprobación / rechazo).
    */
-  async findReceiptForValidation(receiptId) {
+  async findReceiptForValidation(
+    receiptId: number,
+  ): Promise<ReceiptForValidation | undefined> {
     const receipt = await prisma.receipt.findUnique({
       where: { receiptId: Number(receiptId) },
       include: {
@@ -124,23 +199,14 @@ const AccountsPayable = {
   },
 
   /**
-   * Validate (approve or reject) a receipt.
-   * The controller calls this with `3 - approval` which maps to:
-   *   approval=1 -> 2 (Aprobado is index 2 in the old enum)
-   *   approval=0 -> 3 (Rechazado is index 3 in the old enum)
-   * We convert from that integer to the enum string.
-   * @param {number} receiptId - Receipt ID.
-   * @param {number} approval - Validation code (2=Aprobado, 3=Rechazado).
-   * @returns {Promise<boolean>} True if updated.
+   * Validate (approve or reject) a receipt. `approval` is the integer code
+   * (2=Aprobado, 3=Rechazado) — mirrors the legacy `3 - approval` mapping.
    */
-  async validateReceipt(receiptId, approval) {
-    // Map the old integer-based enum indexing to string values
-    const validationMap = { 1: "Pendiente", 2: "Aprobado", 3: "Rechazado" };
-    const validationValue = validationMap[approval] || "Pendiente";
-    // `accountingExportModel.getFinalizedRequestsInRange` filtra por validationDate;
-    // sin esta fecha, las solicitudes finalizadas no aparecen en exportación contable.
-    const validationDate =
-      validationValue === "Pendiente" ? null : new Date();
+  async validateReceipt(receiptId: number, approval: number): Promise<boolean> {
+    const validationValue = VALIDATION_MAP[approval] || "Pendiente";
+    // `getFinalizedRequestsInRange` filtra por validationDate; sin esta fecha,
+    // las solicitudes finalizadas no aparecen en exportación contable.
+    const validationDate = validationValue === "Pendiente" ? null : new Date();
 
     await prisma.receipt.update({
       where: { receiptId: Number(receiptId) },
@@ -150,11 +216,53 @@ const AccountsPayable = {
   },
 
   /**
-   * Get expense validations for a given request.
-   * @param {number} requestId - Identifier of the request.
-   * @returns {Promise<Object>} Structured expense validation summary.
+   * Lista las solicitudes del historial CxP (status 7/8) de la organización
+   * activa, formateadas para la tabla. Tenant scoping aplicado por la extensión.
    */
-  async getExpenseValidations(requestId) {
+  async getAllRequests(): Promise<CxpRequestListItem[]> {
+    const requests = await prisma.request.findMany({
+      where: {
+        active: true,
+        requestStatusId: { in: CXP_HISTORIAL_STATUS_IDS },
+      },
+      select: {
+        requestId: true,
+        requestStatus: { select: { status: true } },
+        routeRequests: {
+          select: {
+            route: {
+              select: {
+                destinationCountry: { select: { countryName: true } },
+                beginningDate: true,
+                endingDate: true,
+              },
+            },
+          },
+          orderBy: { route: { routerIndex: "asc" } },
+        },
+        user: { select: { userName: true } },
+      },
+      orderBy: { creationDate: "desc" },
+    });
+
+    return requests.map((r) => {
+      const firstRoute = r.routeRequests?.[0]?.route;
+      const lastRoute = r.routeRequests?.[r.routeRequests.length - 1]?.route;
+      return {
+        request_id: r.requestId,
+        request_status: r.requestStatus?.status || "Desconocido",
+        destination_country: firstRoute?.destinationCountry?.countryName || "—",
+        beginning_date: formatListDate(firstRoute?.beginningDate),
+        ending_date: formatListDate(lastRoute?.endingDate),
+        requester_name: r.user?.userName || "Usuario Desconocido",
+      };
+    });
+  },
+
+  /**
+   * Get expense validations for a given request.
+   */
+  async getExpenseValidations(requestId: number): Promise<ExpenseValidationsResult> {
     const request = await prisma.request.findUnique({
       where: { requestId: Number(requestId) },
       select: {
@@ -182,8 +290,8 @@ const AccountsPayable = {
     const hasPendingValidation = rows.some((row) => row.validation === "Pendiente");
     const expense_status = hasPendingValidation ? "Pendiente" : "Sin Pendientes";
 
-    const statusOrder = { Pendiente: 1, Rechazado: 2, Aprobado: 3 };
-    rows.sort((a, b) => statusOrder[a.validation] - statusOrder[b.validation]);
+    const statusOrder: Record<string, number> = { Pendiente: 1, Rechazado: 2, Aprobado: 3 };
+    rows.sort((a, b) => (statusOrder[a.validation] ?? 0) - (statusOrder[b.validation] ?? 0));
 
     return {
       request_id: requestId,
@@ -202,19 +310,20 @@ const AccountsPayable = {
           pdf_name: row.pdfFileName,
           xml_id: row.xmlFileId,
           xml_name: row.xmlFileName,
-          // Detalle fiscal esencial (solo lo que el usuario necesita ver)
-          cfdi: c ? {
-            nombreEmisor: c.nombreEmisor,
-            rfcEmisor: c.rfcEmisor,
-            fechaEmision: c.fechaEmision,
-            subtotal: c.subtotal,
-            iva: c.iva,
-            total: c.total,
-            moneda: c.moneda,
-            uuid: c.uuid,
-            satEstado: c.satEstado,
-            tipoComprobante: c.tipoComprobante,
-          } : null,
+          cfdi: c
+            ? {
+                nombreEmisor: c.nombreEmisor,
+                rfcEmisor: c.rfcEmisor,
+                fechaEmision: c.fechaEmision,
+                subtotal: c.subtotal,
+                iva: c.iva,
+                total: c.total,
+                moneda: c.moneda,
+                uuid: c.uuid,
+                satEstado: c.satEstado,
+                tipoComprobante: c.tipoComprobante,
+              }
+            : null,
         };
       }),
     };

@@ -2,7 +2,7 @@
  * PolicyAlert — banner inline reusable que avisa cuando un gasto excede política (M2-006 RF-44).
  * El llamador decide si pasar onJustify (para abrir el PolicyExceptionModal).
  */
-import Button from "@components/Button";
+import Button from "~/shared/ui/Button";
 
 export interface PolicyAlertProps {
   exceeded: boolean;

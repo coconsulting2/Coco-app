@@ -1,36 +1,115 @@
-// @ts-nocheck — legacy route/view props mismatch; M11 UI follow-up
 /**
  * @module comprobar-solicitud.$id
- * @description Página migrada del legacy. Loader pide permiso y (si aplica)
- * carga el dato inicial via DI. Renderiza un componente legacy si existe en
- * shared/ui; si no, muestra placeholder marcado como migration target.
+ * @description Página del Solicitante: revisa los comprobantes de su solicitud
+ * y los envía a validación (status 6 → 7). Loader carga la lista vía
+ * `getReceiptsForRequestValidation`; action intent `send-for-validation` llama
+ * al use-case `submitReceiptsForValidation` del slice travel-requests con
+ * `assertCsrf` + `runInRls`. Tipado completo, sin supresiones.
  */
-import type { LoaderFunctionArgs } from "react-router";
+import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { useLoaderData } from "react-router";
 
-import { requirePermissions, runInTenant } from "~/platform/session/requireUser.server";
-import ValidateReceiptStatus from "~/shared/ui/ValidateReceiptStatus";
-
+import {
+  requirePermissions,
+  runInRls,
+  runInTenant,
+} from "~/platform/session/requireUser.server";
+import { assertCsrf } from "~/platform/csrf/csrf.server";
+import {
+  getReceiptsForRequestValidation,
+  type RequestReceiptsForValidation,
+} from "~/contexts/receipts-cfdi";
+import {
+  submitReceiptsForValidation,
+  TravelRequestError,
+} from "~/contexts/travel-requests";
+import RequestValidationStatus from "~/shared/ui/RequestValidationStatus";
 
 export function meta() {
   return [{ title: "Validar comprobantes — CocoConsulting" }];
 }
 
-export async function loader({ request, params }: LoaderFunctionArgs) {
-  const session = await requirePermissions(request, "expense:submit");
-  return { ok: true };
+function parseRequestId(raw: string | undefined): number {
+  const id = Number(raw);
+  if (!Number.isFinite(id) || id < 1) {
+    throw new Response("Request id inválido", { status: 400 });
+  }
+  return id;
 }
 
-export default function PageRoute({ params }: { params: { id?: string } }) {
-  const data = useLoaderData() as Awaited<ReturnType<typeof loader>>;
+export async function loader({ request, params }: LoaderFunctionArgs) {
+  const session = await requirePermissions(request, "expense:submit");
+  const requestId = parseRequestId(params.id);
+  const receipts = await runInTenant(session, async () =>
+    getReceiptsForRequestValidation({ requestId }),
+  );
+  return { receipts };
+}
+
+export type SubmitValidationActionResult =
+  | { ok: true; alreadySubmitted: boolean; message: string }
+  | { ok: false; error: string; code?: string };
+
+export async function action({
+  request,
+  params,
+}: ActionFunctionArgs): Promise<Response> {
+  const session = await requirePermissions(request, "expense:submit");
+  await assertCsrf(request);
+  const requestId = parseRequestId(params.id);
+
+  const formData = await request.formData();
+  const intent = String(formData.get("intent") ?? "");
+
+  if (intent !== "send-for-validation") {
+    return Response.json(
+      { ok: false, error: `Intent desconocido: ${intent}` } satisfies SubmitValidationActionResult,
+      { status: 400 },
+    );
+  }
+
+  try {
+    const result = await runInRls(session, async () =>
+      submitReceiptsForValidation({ requestId }),
+    );
+    return Response.json(
+      {
+        ok: true,
+        alreadySubmitted: result.alreadySubmitted,
+        message: result.message,
+      } satisfies SubmitValidationActionResult,
+      { status: 200 },
+    );
+  } catch (err) {
+    if (err instanceof Response) throw err;
+    if (err instanceof TravelRequestError) {
+      return Response.json(
+        { ok: false, error: err.message, code: err.code } satisfies SubmitValidationActionResult,
+        { status: err.status },
+      );
+    }
+    const msg = err instanceof Error ? err.message : "No se pudo enviar a validación.";
+    return Response.json(
+      { ok: false, error: msg } satisfies SubmitValidationActionResult,
+      { status: 500 },
+    );
+  }
+}
+
+export default function PageRoute() {
+  const { receipts } = useLoaderData() as {
+    receipts: RequestReceiptsForValidation | null;
+  };
 
   return (
     <section className="max-w-5xl mx-auto space-y-8">
       <header className="space-y-2">
-        <p className="eyebrow text-xs uppercase tracking-widest text-[var(--color-ink-muted)]">Coco / Solicitud</p>
+        <p className="eyebrow text-xs uppercase tracking-widest text-[var(--color-ink-muted)]">
+          Coco / Solicitud
+        </p>
         <h1 className="font-serif text-3xl md:text-4xl">Validar comprobantes</h1>
       </header>
-      <ValidateReceiptStatus requestId={Number(params.id)} />
+      <RequestValidationStatus receipts={receipts} />
     </section>
   );
 }

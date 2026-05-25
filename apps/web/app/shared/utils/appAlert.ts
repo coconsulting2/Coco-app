@@ -1,6 +1,6 @@
 /**
  * Sustituto de window.alert() — dispara un diálogo editorial (AppAlertHost en MainLayout).
- * Uso: import { showAppAlert } from "@utils/appAlert";
+ * Uso: import { showAppAlert } from "~/shared/utils/appAlert";
  */
 
 export type AppAlertVariant = "info" | "success" | "warning" | "error";

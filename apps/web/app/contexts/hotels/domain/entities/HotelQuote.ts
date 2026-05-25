@@ -13,6 +13,14 @@ export type EnrichedStay = EnrichedStayOffer;
 /** Snapshot que se persiste en Request.selectedHotelOffer (JSON). */
 export type SelectedHotelOffer = StayOffer | EnrichedStay;
 
+/**
+ * Oferta de hospedaje tal cual la devuelve un proveedor de búsqueda. Igual que
+ * `StayOffer` pero con `provider` ampliado para cubrir el mock / fallback.
+ */
+export type HotelSearchOffer = Omit<StayOffer, "provider"> & {
+  provider: "duffel_stays" | "mock" | "mock_fallback";
+};
+
 export type StaySearchInput = {
   ciudad: string;
   fechaEntrada: string;

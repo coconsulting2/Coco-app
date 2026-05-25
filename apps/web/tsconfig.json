@@ -22,6 +22,8 @@
       "@coco/ui-kit": ["../../packages/ui-kit/src/index.ts"],
       "@coco/ui-kit/*": ["../../packages/ui-kit/src/*"],
       "~/*": ["./app/*"],
+      "@/*": ["./app/shared/*"],
+      "@tests/*": ["./tests/*"],
       "@components/*": ["./app/shared/ui/*"],
       "@utils/*": ["./app/shared/utils/*"],
       "@config/*": ["./app/shared/config/*"],

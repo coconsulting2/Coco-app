@@ -8,6 +8,7 @@ import { Link, useLocation } from "react-router";
 
 import MaterialIcon from "~/shared/ui/MaterialIcon";
 import LogoutButton from "~/shared/ui/Logout";
+import NotificationBell from "~/shared/ui/NotificationBell";
 
 type Props = {
   userName: string;
@@ -56,15 +57,19 @@ export default function PageHeader({ userName, buttonLabel, userId }: Props) {
         </span>
 
         <div className="flex items-center gap-0.5 sm:gap-1">
-          {/* NotificationBell is server-driven; rendered as no-op placeholder
-              until migrated to RR-native loader. Mantenemos el slot por estética. */}
-          <button
-            type="button"
-            className="p-2 rounded-[var(--radius-md)] text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-secondary)] hover:text-[var(--color-ink)] transition-colors"
-            aria-label="Notificaciones"
-          >
-            <MaterialIcon icon="notifications" color="currentColor" />
-          </button>
+          {/* NotificationBell: RR-native, self-loads via resource route
+              `/api/notifications/:userId` con useFetcher (sin apiRequest). */}
+          {userId != null ? (
+            <NotificationBell userId={userId} />
+          ) : (
+            <button
+              type="button"
+              className="p-2 rounded-[var(--radius-md)] text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-secondary)] hover:text-[var(--color-ink)] transition-colors"
+              aria-label="Notificaciones"
+            >
+              <MaterialIcon icon="notifications" color="currentColor" />
+            </button>
+          )}
           <LogoutButton>
             <div className="p-2 rounded-[var(--radius-md)] text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-secondary)] hover:text-[var(--color-ink)] transition-colors cursor-pointer">
               <MaterialIcon icon="logout" color="currentColor" />

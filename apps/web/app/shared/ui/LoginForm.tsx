@@ -8,18 +8,10 @@
  *  • Desktop: 50/50. Panel izq.: self-stretch; md: flex-1 entre hero y pie.
  */
 
-import React, { useEffect, useState } from "react";
-import { apiRequest } from "@utils/apiClient";
-import { getSession } from "@data/cookies";
-import Button from "@components/Button";
-
-/** Cookies en el dominio del frontend (4321); el middleware Astro las lee en SSR. */
-function setSessionCookie(name: string, value: string) {
-  if (value == null || value === "") return;
-  const secure =
-    typeof window !== "undefined" && window.location.protocol === "https:" ? "; Secure" : "";
-  document.cookie = `${name}=${encodeURIComponent(String(value))}; path=/; SameSite=Strict${secure}`;
-}
+import React, { useState } from "react";
+import { useFetcher } from "react-router";
+import Button from "~/shared/ui/Button";
+import type { LoginActionData } from "~/routes/_public/login";
 
 /* ── Tokens ── */
 const COLOR_BG_DARK = "#0A0A0A";
@@ -129,66 +121,30 @@ function EyeSlashIcon() {
 
 /* ── Componente principal ── */
 export default function LoginForm() {
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  /** Opcional: id de organización si el mismo usuario existe en varios tenants. */
-  const [organizationId, setOrganizationId] = useState("");
   const [showPassword, setShowPassword] = useState(false);
-  const [errorMessage, setErrorMessage] = useState("");
 
-  useEffect(() => {
-    const { role } = getSession();
-    if (role) {
-      window.location.replace("/dashboard");
+  /**
+   * `useFetcher` postea a la `action` de la ruta `/login`, que autentica
+   * server-side (use-case identity), setea las cookies de sesión httpOnly y
+   * redirige a `/dashboard`. En error devuelve `LoginActionData`.
+   */
+  const fetcher = useFetcher<LoginActionData>();
+  const submitting = fetcher.state !== "idle";
+
+  // Mensaje de error (paridad legacy): para usuario ambiguo entre organizaciones
+  // anexamos la lista de organizaciones al texto.
+  const data = fetcher.data;
+  let errorMessage = "";
+  if (data?.error) {
+    if (data.code === "AMBIGUOUS_USERNAME" && Array.isArray(data.organizations)) {
+      const orgs = data.organizations
+        .map((o) => `${o.nombre || "?"} (id ${o.id})`)
+        .join(" · ");
+      errorMessage = `${data.error} ${orgs}`;
+    } else {
+      errorMessage = data.error;
     }
-  }, []);
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const hadSession = Boolean(getSession().role || getSession().token);
-    if (hadSession) {
-      try {
-        await apiRequest("/user/logout", { method: "GET" });
-      } catch {
-        /* continuar con login nuevo */
-      }
-    }
-
-    try {
-      const data: { username: string; password: string; organization_id?: string } = {
-        username,
-        password,
-      };
-      if (organizationId.trim()) {
-        data.organization_id = organizationId.trim();
-      }
-      const response = await apiRequest("/user/login", {
-        method: "POST",
-        data,
-      });
-
-      setErrorMessage("");
-      setSessionCookie("token", response.token);
-      setSessionCookie("role", response.role);
-      setSessionCookie("username", response.username);
-      setSessionCookie("user_id", String(response.user_id));
-      if (response.department_id != null && response.department_id !== "") {
-        setSessionCookie("department_id", String(response.department_id));
-      }
-      window.location.href = "/dashboard";
-    } catch (error: any) {
-      const resData = error?.response?.data;
-      if (resData?.code === "AMBIGUOUS_USERNAME" && Array.isArray(resData.organizations)) {
-        const orgs = resData.organizations
-          .map((o: { id: string; nombre: string }) => `${o.nombre || "?"} (id ${o.id})`)
-          .join(" · ");
-        setErrorMessage(`${resData.error || "Usuario duplicado entre organizaciones."} ${orgs}`);
-      } else {
-        const msg = resData?.error || "Error al iniciar sesión";
-        setErrorMessage(msg);
-      }
-    }
-  };
+  }
 
   /* Estilos compartidos */
   const inputStyle: React.CSSProperties = {
@@ -391,7 +347,7 @@ export default function LoginForm() {
           </p>
 
           {/* ── Form ── */}
-          <form onSubmit={handleSubmit} className="mt-5 md:mt-8">
+          <fetcher.Form method="post" className="mt-5 md:mt-8">
             {/* Usuario */}
             <div className="mb-4 md:mb-6">
               <label htmlFor="username" style={labelStyle}>
@@ -407,8 +363,9 @@ export default function LoginForm() {
                 autoCapitalize="none"
                 required
                 placeholder="nombre@ditta.com.mx"
-                value={username}
-                onChange={(e) => setUsername(e.target.value.toLowerCase())}
+                onChange={(e) => {
+                  e.target.value = e.target.value.toLowerCase();
+                }}
                 style={inputStyle}
                 onFocus={handleFocus}
                 onBlur={handleBlur}
@@ -451,8 +408,6 @@ export default function LoginForm() {
                   type={showPassword ? "text" : "password"}
                   autoComplete="current-password"
                   required
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
                   style={{ ...inputStyle, paddingRight: "2.5rem" }}
                   onFocus={handleFocus}
                   onBlur={handleBlur}
@@ -494,8 +449,6 @@ export default function LoginForm() {
                 inputMode="numeric"
                 autoComplete="off"
                 placeholder="Ej. 100 — solo si te lo indica el administrador"
-                value={organizationId}
-                onChange={(e) => setOrganizationId(e.target.value)}
                 style={inputStyle}
                 onFocus={handleFocus}
                 onBlur={handleBlur}
@@ -508,6 +461,7 @@ export default function LoginForm() {
               variant="filled"
               color="primary"
               size="big"
+              disabled={submitting}
               className="w-full active:scale-[0.99] motion-safe:transition-transform"
               style={{
                 minHeight: 48,
@@ -515,7 +469,7 @@ export default function LoginForm() {
                 fontWeight: 500,
               }}
             >
-              Entrar
+              {submitting ? "Entrando…" : "Entrar"}
             </Button>
 
             {/* Error */}
@@ -531,7 +485,7 @@ export default function LoginForm() {
                 {errorMessage}
               </p>
             )}
-          </form>
+          </fetcher.Form>
 
           {/* Footer */}
           <p

@@ -16,9 +16,9 @@
  */
 
 import { useMemo, useState } from "react";
-import AuthRequestsList from "@components/RequestsLists/AuthRequestsList";
-import type { UserRole } from "@type/roles";
-import { canAuthorizeRequest } from "@utils/canAuthorize";
+import AuthRequestsList from "~/shared/ui/RequestsLists/AuthRequestsList";
+import type { UserRole } from "~/shared/types/roles";
+import { canAuthorizeRequest } from "~/shared/utils/canAuthorize";
 
 type TripType = "all" | "nacional" | "internacional";
 

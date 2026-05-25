@@ -3,13 +3,13 @@
  * Debe montarse una vez en MainLayout con client:load.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { MODAL_STYLES, type ModalType } from "@config/modal";
+import { MODAL_STYLES, type ModalType } from "~/shared/config/modal";
 import {
   COCO_ALERT_EVENT,
   COCO_ALERT_CLOSED_EVENT,
   type AppAlertVariant,
   type CocoAlertDetail,
-} from "@utils/appAlert";
+} from "~/shared/utils/appAlert";
 
 const variantToModalType: Record<AppAlertVariant, ModalType> = {
   info: "confirm",

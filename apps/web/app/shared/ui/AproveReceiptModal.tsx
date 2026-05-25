@@ -1,55 +1,88 @@
-import { useCallback } from "react";
-import { apiRequest } from "@utils/apiClient";
-import ModalWrapper from "@components/ModalWrapper";
-import { showAppAlertAsync } from "@utils/appAlert";
+/**
+ * @module AproveReceiptModal
+ * @description Botón inline + modal de confirmación para aprobar UN comprobante
+ * individual desde CxP. Submitea al action de la route padre vía `useFetcher`
+ * con intent="approve". Espera que la route padre (`comprobar-gastos.$id`)
+ * exponga un action que llame al use-case `validateReceiptDecision` del slice
+ * receipts-cfdi — paridad 1:1 con el legacy
+ * `PUT /accounts-payable/validate-receipt/:id { approval: 1 }`.
+ *
+ * Prop-driven: recibe `receipt_id`. Cero apiRequest / token; sesión y CSRF los
+ * resuelve el action de la route en el servidor. Hermano de
+ * `AproveReceiptsModal` (plural) — replica su patrón exacto.
+ */
+import { useEffect, useState } from "react";
+import { useFetcher } from "react-router";
+import ModalWrapper from "~/shared/ui/ModalWrapper";
+import Toast from "~/shared/ui/Toast";
 
 interface Props {
   receipt_id: number;
   title: string;
   message: string;
-  redirection: string;
   modal_type: "success" | "warning";
   variant?: "filled" | "border" | "empty";
   children: React.ReactNode;
-  token: string;
+  disabled?: boolean;
+  /** Callback opcional tras éxito. */
+  onSuccess?: () => void;
 }
 
-export default function ValidateReceiptStatus({
+type FetcherResult = { ok: true } | { ok: false; error: string; code?: string };
+
+export default function AproveReceiptStatus({
   receipt_id,
   title,
   message,
-  redirection,
   modal_type,
   variant,
   children,
-  token
+  disabled = false,
+  onSuccess,
 }: Props) {
-  const handleConfirm = useCallback(async () => {
-    try {
-      const url = `/accounts-payable/validate-receipt/${receipt_id}`;
-      await apiRequest(url, { method: "PUT", data: {"approval": 1}, headers: { Authorization: `Bearer ${token}` }});
-      await showAppAlertAsync("Comprobante enviado exitosamente.", { variant: "success" });
+  const fetcher = useFetcher<FetcherResult>();
+  const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
 
-      if (redirection) {
-        window.location.href = redirection;
-      } else {
-        window.location.reload();
-      }
-    } catch (error) {
-      console.error("Error en la solicitud:", error);
+  useEffect(() => {
+    if (fetcher.state !== "idle" || !fetcher.data) return;
+    if (fetcher.data.ok) {
+      setToast({ message: "Comprobante enviado exitosamente.", type: "success" });
+      onSuccess?.();
+    } else {
+      setToast({
+        message: fetcher.data.error ?? "No se pudo aprobar el comprobante.",
+        type: "error",
+      });
     }
-  }, [receipt_id, redirection]);
+  }, [fetcher.state, fetcher.data, onSuccess]);
+
+  const handleConfirm = () => {
+    fetcher.submit(
+      { intent: "approve", receiptId: String(receipt_id) },
+      { method: "post" },
+    );
+  };
 
   return (
-    <ModalWrapper
-      title={title}
-      message={message}
-      button_type={modal_type === "warning" ? "danger" : modal_type}
-      modal_type={modal_type}
-      onConfirm={handleConfirm}
-      variant={variant}
-    >
-      {children}
-    </ModalWrapper>
+    <>
+      <ModalWrapper
+        title={title}
+        message={message}
+        button_type={modal_type === "warning" ? "danger" : modal_type}
+        modal_type={modal_type}
+        onConfirm={handleConfirm}
+        variant={variant}
+        disabled={disabled || fetcher.state !== "idle"}
+      >
+        {children}
+      </ModalWrapper>
+      {toast && (
+        <Toast
+          message={toast.message}
+          type={toast.type}
+          duration={toast.type === "error" ? 5000 : 3500}
+        />
+      )}
+    </>
   );
 }

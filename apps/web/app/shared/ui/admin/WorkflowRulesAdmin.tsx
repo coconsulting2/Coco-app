@@ -2,9 +2,9 @@
  * WorkflowRulesAdmin — CRUD panel for workflow rules per organization.
  * Visible only for the org Administrador role (workflow:manage permission).
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { apiRequest } from "@utils/apiClient";
-import type { WorkflowRuleDTO, WfRuleType, WfParamType } from "@type/WorkflowRuleTypes";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useFetcher } from "react-router";
+import type { WorkflowRuleDTO, WfRuleType, WfParamType } from "~/shared/types/WorkflowRuleTypes";
 
 /* ── Design Tokens ─────────────────────────────────────────────── */
 const T = {
@@ -42,13 +42,18 @@ const PARAM_TYPES: { value: WfParamType; label: string }[] = [
   { value: "moneda", label: "Moneda" },
 ];
 
-interface DepartmentOption {
+export interface DepartmentOption {
   departmentId: number;
   departmentName: string;
   costsCenter?: string | null;
 }
 
-const EMPTY_FORM: Omit<WorkflowRuleDTO, "id" | "active" | "createdAt" | "departmentName" | "costsCenter"> = {
+type RuleForm = Omit<
+  WorkflowRuleDTO,
+  "id" | "active" | "createdAt" | "departmentName" | "costsCenter"
+>;
+
+const EMPTY_FORM: RuleForm = {
   ruleType: "pre",
   paramType: "importe",
   threshold: null,
@@ -62,77 +67,56 @@ const EMPTY_FORM: Omit<WorkflowRuleDTO, "id" | "active" | "createdAt" | "departm
 };
 
 interface Props {
-  token?: string;
+  /** Reglas precargadas por el loader RR7 (DTO mapeado desde el use-case hex). */
+  initialRules: WorkflowRuleDTO[];
+  /** Catálogo de departamentos activos del tenant. */
+  departments: DepartmentOption[];
+  /** Nombres de roles del tenant (para el select de rol destino). */
+  roles: string[];
 }
 
-function getApiErrorMessage(err: unknown, fallback: string): string {
-  const detail = err && typeof err === "object" && "detail" in err
-    ? (err as { detail?: { response?: { error?: string } } }).detail
-    : undefined;
+type ActionData = { ok: true } | { ok: false; error: string; code?: string };
 
-  if (detail?.response && typeof detail.response.error === "string") {
-    return detail.response.error;
-  }
-
-  return err instanceof Error ? err.message : fallback;
+function nullableNum(v: number | null): string {
+  return v == null ? "" : String(v);
 }
 
-export default function WorkflowRulesAdmin({ token }: Props) {
-  const [rules, setRules] = useState<WorkflowRuleDTO[]>([]);
-  const [departments, setDepartments] = useState<DepartmentOption[]>([]);
-  const [roles, setRoles] = useState<string[]>([]);
-  const [loading, setLoading] = useState(true);
+export default function WorkflowRulesAdmin({
+  initialRules,
+  departments,
+  roles,
+}: Props) {
+  const fetcher = useFetcher<ActionData>();
+  const submitting = fetcher.state !== "idle";
+
+  const rules = initialRules;
   const [error, setError] = useState<string | null>(null);
   const [filterDept, setFilterDept] = useState<string>("all");
 
   // Modal state
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [form, setForm] = useState(EMPTY_FORM);
-  const [saving, setSaving] = useState(false);
+  const [form, setForm] = useState<RuleForm>(EMPTY_FORM);
   const [formError, setFormError] = useState<string | null>(null);
 
-  const headers = useMemo(
-    () => (token ? { Authorization: `Bearer ${token}` } : undefined),
-    [token]
-  );
-
-  const fetchRules = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const data = await apiRequest<WorkflowRuleDTO[]>("/workflow-rules", { headers });
-      setRules(data);
-    } catch (err) {
-      setError(getApiErrorMessage(err, "Error al cargar reglas."));
-    } finally {
-      setLoading(false);
-    }
-  }, [headers]);
-
-  const fetchDepartments = useCallback(async () => {
-    try {
-      const data = await apiRequest<DepartmentOption[]>("/workflow-rules/departments", { headers });
-      setDepartments(data);
-    } catch {
-      /* Departments may not be available yet */
-    }
-  }, [headers]);
-
-  const fetchRoles = useCallback(async () => {
-    try {
-      const data = await apiRequest<string[]>("/workflow-rules/roles", { headers });
-      setRoles(data);
-    } catch {
-      setRoles(["Solicitante", "N1", "N2", "Cuentas por pagar", "Administrador"]);
-    }
-  }, [headers]);
+  // Tracks whether the active fetcher submission targets the modal (save) so
+  // we only close it / surface its error in the right place.
+  const intentRef = useRef<"save" | "toggle" | null>(null);
 
   useEffect(() => {
-    fetchRules();
-    fetchDepartments();
-    fetchRoles();
-  }, [fetchRules, fetchDepartments, fetchRoles]);
+    if (fetcher.state !== "idle" || !fetcher.data) return;
+    const data = fetcher.data;
+    if (data.ok) {
+      if (intentRef.current === "save") setModalOpen(false);
+      setError(null);
+      setFormError(null);
+    } else if (intentRef.current === "save") {
+      setFormError(data.error);
+    } else {
+      setError(data.error);
+    }
+    intentRef.current = null;
+  }, [fetcher.state, fetcher.data]);
 
   const filteredRules = useMemo(() => {
     if (filterDept === "all") return rules;
@@ -165,46 +149,40 @@ export default function WorkflowRulesAdmin({ token }: Props) {
     setModalOpen(true);
   };
 
-  const handleToggle = async (rule: WorkflowRuleDTO) => {
-    try {
-      await apiRequest(`/workflow-rules/${rule.id}/toggle`, { method: "PATCH", headers });
-      await fetchRules();
-    } catch (err) {
-      setError(getApiErrorMessage(err, "Error al cambiar estado."));
-    }
+  const handleToggle = (rule: WorkflowRuleDTO) => {
+    setError(null);
+    intentRef.current = "toggle";
+    fetcher.submit(
+      { intent: "toggle", id: rule.id },
+      { method: "post" },
+    );
   };
 
-  const handleSave = async () => {
-    setSaving(true);
+  const handleSave = () => {
     setFormError(null);
-    try {
-      const payload = {
-        ...form,
-        threshold: form.paramType === "importe" && form.threshold != null ? Number(form.threshold) : null,
-        paramValue: form.paramType !== "importe" ? form.paramValue : null,
-        approvalLevel: Number(form.approvalLevel) || 1,
-        skipIfBelow: form.skipIfBelow != null ? Number(form.skipIfBelow) : null,
-        priority: Number(form.priority) || 10,
-        departmentId: form.departmentId ? Number(form.departmentId) : null,
-        managerSteps: form.managerSteps != null ? Number(form.managerSteps) : null,
-        targetRole: form.targetRole || null,
-      };
-
-      if (editingId) {
-        await apiRequest(`/workflow-rules/${editingId}`, { method: "PUT", data: payload, headers });
-      } else {
-        await apiRequest("/workflow-rules", { method: "POST", data: payload, headers });
-      }
-      setModalOpen(false);
-      await fetchRules();
-    } catch (err) {
-      setFormError(getApiErrorMessage(err, "Error al guardar."));
-    } finally {
-      setSaving(false);
-    }
+    intentRef.current = "save";
+    const fields: Record<string, string> = {
+      intent: editingId ? "update" : "create",
+      ruleType: form.ruleType,
+      paramType: form.paramType,
+      threshold:
+        form.paramType === "importe" ? nullableNum(form.threshold) : "",
+      paramValue: form.paramType !== "importe" ? form.paramValue ?? "" : "",
+      approvalLevel: String(Number(form.approvalLevel) || 1),
+      skipIfBelow: nullableNum(form.skipIfBelow),
+      priority: String(Number(form.priority) || 10),
+      departmentId: nullableNum(form.departmentId),
+      managerSteps: nullableNum(form.managerSteps),
+      targetRole: form.targetRole ?? "",
+    };
+    if (editingId) fields.id = editingId;
+    fetcher.submit(fields, { method: "post" });
   };
 
-  const updateForm = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) => {
+  const loading = false;
+  const saving = submitting && intentRef.current === "save";
+
+  const updateForm = <K extends keyof RuleForm>(key: K, value: RuleForm[K]) => {
     setForm((prev) => ({ ...prev, [key]: value }));
   };
 

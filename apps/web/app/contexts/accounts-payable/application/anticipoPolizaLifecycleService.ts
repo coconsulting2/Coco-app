@@ -1,29 +1,28 @@
-// @ts-nocheck — bulk-converted legacy; typed properly is M9 follow-up
 /**
  * @module anticipoPolizaLifecycleService
  * @description Persiste snapshots de la póliza AV en hitos del flujo:
  * aprobación de la solicitud (monto requested_fee) y cierre por comprobación
  * de gastos (monto imposed_fee).
  *
- * Refactor Fase 6: prisma + Prisma extraídos a anticipoPolizaQueries.js.
+ * Refactor Fase 6: prisma + Prisma extraídos a anticipoPolizaQueries.
  */
-import { buildAnticipoPolizaForAdvance } from "./accountingExportService.js";
+import { buildAnticipoPolizaForAdvance } from "~/contexts/accounts-payable/application/accountingExportService.js";
 import {
   findRequestWithAccountingContext,
   createAnticipoPolizaSnapshot,
   findRequestedFee,
   findImposedFee,
 } from "~/contexts/accounts-payable/infrastructure/anticipoPolizaQueries.js";
+import type { AccountingPoliza } from "~/contexts/accounts-payable/domain/entities/AccountingPoliza";
 
 export const ON_TRAVEL_APPROVED = "ON_TRAVEL_APPROVED";
 export const ON_EXPENSES_VERIFIED = "ON_EXPENSES_VERIFIED";
 
-/**
- * @param {number} requestId
- * @param {string} phase ON_TRAVEL_APPROVED | ON_EXPENSES_VERIFIED
- * @param {number} advanceAmount
- */
-async function persistSnapshot(requestId, phase, advanceAmount) {
+async function persistSnapshot(
+  requestId: number,
+  phase: string,
+  advanceAmount: number,
+): Promise<void> {
   const row = await findRequestWithAccountingContext(requestId);
   if (!row?.userId) return;
 
@@ -31,9 +30,8 @@ async function persistSnapshot(requestId, phase, advanceAmount) {
     {
       requestId: row.requestId,
       userId: row.userId,
-      organizationId: row.organizationId,
-      organization: row.organization,
       user: row.user,
+      organization: row.organization,
     },
     advanceAmount,
   );
@@ -43,16 +41,14 @@ async function persistSnapshot(requestId, phase, advanceAmount) {
     organizationId: row.organizationId,
     requestId: row.requestId,
     phase,
-    payload: poliza,
+    payload: poliza as unknown as AccountingPoliza,
   });
 }
 
 /**
  * Tras aprobación N1/N2: la solicitud pasa a cotización (status 4). Usa requested_fee.
- *
- * @param {number} requestId
  */
-export async function onTravelRequestFullyApproved(requestId) {
+export async function onTravelRequestFullyApproved(requestId: number): Promise<void> {
   const row = await findRequestedFee(requestId);
   const amt = row?.requestedFee;
   if (amt === null || amt === undefined || Number(amt) <= 0) return;
@@ -61,19 +57,19 @@ export async function onTravelRequestFullyApproved(requestId) {
 
 /**
  * Tras validar todos los recibos y marcar el viaje Finalizado. Usa imposed_fee.
- *
- * @param {number} requestId
  */
-export async function onExpensesVerified(requestId) {
+export async function onExpensesVerified(requestId: number): Promise<void> {
   const row = await findImposedFee(requestId);
   const amt = row?.imposedFee;
   if (amt === null || amt === undefined || Number(amt) <= 0) return;
   await persistSnapshot(requestId, ON_EXPENSES_VERIFIED, Number(amt));
 }
 
-export default {
+const AnticipoPolizaLifecycleService = {
   onTravelRequestFullyApproved,
   onExpensesVerified,
   ON_TRAVEL_APPROVED,
   ON_EXPENSES_VERIFIED,
 };
+
+export default AnticipoPolizaLifecycleService;

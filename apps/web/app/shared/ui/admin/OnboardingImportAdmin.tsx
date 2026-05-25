@@ -7,7 +7,7 @@
  *   3. Botón "Importar" → POST /apply → resultado.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { uploadImportPreview, applyImportPreview } from "@utils/uploadOnboarding";
+import { useFetcher } from "react-router";
 import type {
   PreviewImportResponse,
   ApplyImportResponse,
@@ -16,13 +16,19 @@ import type {
   PermissionsCatalog,
   ImportUserPreview,
   CustomImportRoleSpec,
-} from "@type/onboardingImport";
-import { getPermissionFriendlyLabel } from "@utils/permissionLabels";
+} from "~/shared/types/onboardingImport";
+import { getPermissionFriendlyLabel } from "~/shared/utils/permissionLabels";
 import {
   getImpersonatedOrgId,
   IMPERSONATED_ORG_CHANGE_EVENT,
   IMPERSONATED_ORG_ID_STORAGE_KEY,
-} from "@stores/organizationStore";
+} from "~/shared/stores/organizationStore";
+
+/** Resultado del action RR7 `routes/_app/admin/onboarding-import` (intent preview/apply). */
+type ImportActionResult =
+  | { ok: true; intent: "preview"; preview: PreviewImportResponse }
+  | { ok: true; intent: "apply"; result: ApplyImportResponse }
+  | { ok: false; intent: string; error: string };
 
 /** Misma regla que el backend (importación). */
 const ONBOARDING_PASSWORD_RE = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/;
@@ -59,16 +65,14 @@ const T = {
 } as const;
 
 interface Props {
-  /**
-   * Org destino explícita (poco habitual). Si no se pasa, `uploadImportPreview` / `applyImportPreview`
-   * usan la org impersonada del selector principal (`getImpersonatedOrgId`), alineado con `apiRequest`.
-   */
-  orgId?: string;
+  /** Si el actor puede crear organizaciones nuevas (`organization:create`), resuelto en el loader. */
+  canCreateOrganization?: boolean;
 }
 
 type Phase = "idle" | "loading" | "preview" | "applying" | "done" | "error";
 
-export default function OnboardingImportAdmin({ orgId }: Props) {
+export default function OnboardingImportAdmin({ canCreateOrganization = false }: Props) {
+  const fetcher = useFetcher<ImportActionResult>();
   const [phase, setPhase]       = useState<Phase>("idle");
   const [dragging, setDragging] = useState(false);
   const [fileName, setFileName] = useState<string>("");
@@ -115,6 +119,36 @@ export default function OnboardingImportAdmin({ orgId }: Props) {
   }, []);
 
   const inputRef = useRef<HTMLInputElement>(null);
+  /** Intent del submit en vuelo, para enrutar la respuesta del fetcher. */
+  const pendingIntent = useRef<"preview" | "apply" | null>(null);
+
+  // Procesa la respuesta del action RR7 (preview/apply) cuando el fetcher termina.
+  useEffect(() => {
+    if (fetcher.state !== "idle") return;
+    const data = fetcher.data;
+    if (!data || !pendingIntent.current) return;
+    const intent = pendingIntent.current;
+    pendingIntent.current = null;
+
+    if (!data.ok) {
+      setErrorMsg(data.error);
+      if (intent === "apply") {
+        setPreviewApplyError(data.error);
+        setPhase("preview");
+      } else {
+        setPhase("error");
+      }
+      return;
+    }
+
+    if (data.intent === "preview") {
+      setPreview(data.preview);
+      setPhase("preview");
+    } else if (data.intent === "apply") {
+      setResult(data.result);
+      setPhase("done");
+    }
+  }, [fetcher.state, fetcher.data]);
 
   useEffect(() => {
     if (!preview?.previewToken) return;
@@ -164,18 +198,16 @@ export default function OnboardingImportAdmin({ orgId }: Props) {
       setPreviewApplyError("");
       setPreview(null);
       setResult(null);
-      try {
-        const res = await uploadImportPreview(file, orgId, {
-          createNewOrganization: Boolean(createNewOrgOption && !getImpersonatedOrgId()),
-        });
-        setPreview(res);
-        setPhase("preview");
-      } catch (e: unknown) {
-        setErrorMsg(e instanceof Error ? e.message : String(e));
-        setPhase("error");
-      }
+
+      const createNew = Boolean(createNewOrgOption && !getImpersonatedOrgId());
+      const formData = new FormData();
+      formData.append("intent", "preview");
+      formData.append("file", file);
+      formData.append("createNewOrganization", createNew ? "true" : "false");
+      pendingIntent.current = "preview";
+      fetcher.submit(formData, { method: "post", encType: "multipart/form-data" });
     },
-    [orgId, createNewOrgOption]
+    [createNewOrgOption, fetcher]
   );
 
   const handleDrop = useCallback(
@@ -276,20 +308,31 @@ export default function OnboardingImportAdmin({ orgId }: Props) {
         if (role.trim()) roleOverridesPayload[un] = role.trim();
       }
 
-      const res = await applyImportPreview(preview.previewToken, orgId, {
-        roleMappings: preview.needsRoleMappingCount > 0 ? maps : undefined,
-        roleOverrides:
-          Object.keys(roleOverridesPayload).length > 0 ? roleOverridesPayload : undefined,
-        permissionExtras:
-          Object.keys(extrasPayload).length > 0 ? extrasPayload : undefined,
-        passwordGlobal: g || undefined,
-        passwordOverrides: Object.keys(pwdOverrides).length > 0 ? pwdOverrides : undefined,
-        createNewOrganization: Boolean(preview.previewCreateNewOrganization),
-        customImportRoles:
-          Object.keys(customPayload).length > 0 ? customPayload : undefined,
-      });
-      setResult(res);
-      setPhase("done");
+      const formData = new FormData();
+      formData.append("intent", "apply");
+      formData.append("previewToken", preview.previewToken);
+      formData.append(
+        "createNewOrganization",
+        preview.previewCreateNewOrganization ? "true" : "false"
+      );
+      if (preview.needsRoleMappingCount > 0 && Object.keys(maps).length > 0) {
+        formData.append("roleMappings", JSON.stringify(maps));
+      }
+      if (Object.keys(roleOverridesPayload).length > 0) {
+        formData.append("roleOverrides", JSON.stringify(roleOverridesPayload));
+      }
+      if (Object.keys(extrasPayload).length > 0) {
+        formData.append("permissionExtras", JSON.stringify(extrasPayload));
+      }
+      if (g) formData.append("passwordGlobal", g);
+      if (Object.keys(pwdOverrides).length > 0) {
+        formData.append("passwordOverrides", JSON.stringify(pwdOverrides));
+      }
+      if (Object.keys(customPayload).length > 0) {
+        formData.append("customImportRoles", JSON.stringify(customPayload));
+      }
+      pendingIntent.current = "apply";
+      fetcher.submit(formData, { method: "post", encType: "multipart/form-data" });
     } catch (e: unknown) {
       setErrorMsg(e instanceof Error ? e.message : String(e));
       setPhase("error");
@@ -341,7 +384,7 @@ export default function OnboardingImportAdmin({ orgId }: Props) {
               <input
                 type="checkbox"
                 checked={createNewOrgOption}
-                disabled={Boolean(impersonatedOrgId)}
+                disabled={Boolean(impersonatedOrgId) || !canCreateOrganization}
                 onChange={(e) => setCreateNewOrgOption(e.target.checked)}
                 style={{
                   marginTop: 4,

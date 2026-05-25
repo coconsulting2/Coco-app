@@ -28,10 +28,7 @@ import {
 } from "~/platform/session/requireUser.server";
 import { assertCsrf } from "~/platform/csrf/csrf.server";
 
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore — JS legacy services (grandfathered)
 import * as applicantService from "~/contexts/travel-requests/application/applicantService.js";
-// @ts-ignore
 import Applicant from "~/contexts/travel-requests/infrastructure/applicantModel.js";
 
 type DispatchArgs = { request: Request; subpath: string };
@@ -75,7 +72,8 @@ export async function dispatchApplicantApi({ request, subpath }: DispatchArgs): 
     if (method === "PUT" && path.startsWith("edit-travel-request/")) {
       const session = await requirePermissions(request, "travel_request:edit_own");
       await assertCsrf(request);
-      const userId = Number(path.slice("edit-travel-request/".length));
+      // El path lleva `:user_id` por compat con el contrato legacy, pero la
+      // edición se identifica por `request_id` del body (el dueño se valida vía RLS).
       const body = await readJson(request);
       const requestId = Number(body?.request_id);
       if (!Number.isFinite(requestId)) {
@@ -84,7 +82,6 @@ export async function dispatchApplicantApi({ request, subpath }: DispatchArgs): 
       const result = await runInTenant(session, async () =>
         Applicant.editTravelRequest(requestId, body),
       );
-      void userId;
       return jsonOk({ ...(result as Record<string, unknown> ?? {}), message: "Travel request updated" });
     }
 

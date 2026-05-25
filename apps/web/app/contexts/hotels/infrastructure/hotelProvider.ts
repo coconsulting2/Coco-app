@@ -1,17 +1,21 @@
-// @ts-nocheck — legacy provider; will be removed when dispatchers delegate to @coco/integrations
 /**
- * Proveedor de hospedaje: Duffel Stays (sandbox) o mock.
- * - HOTEL_PROVIDER=mock | duffel (explícito)
- * - Si no se define: mock por defecto (vuelos pueden usar Duffel sin Stays habilitado).
- * - HOTEL_PROVIDER=duffel o herencia con FLIGHT_PROVIDER=duffel: intenta Duffel y cae a mock si Stays no está en la cuenta.
+ * @module hotelProvider
+ * @description Selección del adapter de hospedaje según `HOTEL_PROVIDER`
+ * (o herencia de `FLIGHT_PROVIDER`). Paridad con el legacy
+ * `services/hotelProvider.js`.
+ *
+ * - HOTEL_PROVIDER=mock        → siempre mock.
+ * - HOTEL_PROVIDER=duffel      → Duffel resiliente (cae a mock si 403).
+ * - sin HOTEL_PROVIDER         → Duffel resiliente si FLIGHT_PROVIDER=duffel; mock en otro caso.
  */
-import { MockHotelProvider } from "./mockHotelProvider.js";
-import { ResilientHotelProvider } from "./resilientHotelProvider.js";
+import { MockHotelProvider } from "~/contexts/hotels/infrastructure/mockHotelProvider.js";
+import { ResilientHotelProvider } from "~/contexts/hotels/infrastructure/resilientHotelProvider.js";
+import type {
+  HotelProvider,
+  HotelProviderLabel,
+} from "~/contexts/hotels/domain/ports/HotelProvider.js";
 
-/**
- * @returns {ResilientHotelProvider | MockHotelProvider}
- */
-export function getHotelProvider() {
+export function getHotelProvider(): HotelProvider {
   const hotelExplicit = process.env.HOTEL_PROVIDER
     ? String(process.env.HOTEL_PROVIDER).toLowerCase()
     : "";
@@ -22,22 +26,25 @@ export function getHotelProvider() {
 
   const useDuffel =
     hotelExplicit === "duffel" ||
-    (!hotelExplicit && String(process.env.FLIGHT_PROVIDER || "mock").toLowerCase() === "duffel");
+    (!hotelExplicit &&
+      String(process.env.FLIGHT_PROVIDER || "mock").toLowerCase() === "duffel");
 
-  if (useDuffel) {
-    return new ResilientHotelProvider();
-  }
-
-  return new MockHotelProvider();
+  return useDuffel ? new ResilientHotelProvider() : new MockHotelProvider();
 }
 
-/**
- * @param {ResilientHotelProvider | MockHotelProvider} provider
- * @returns {string}
- */
-export function getActiveHotelProviderLabel(provider) {
+/** Etiqueta del proveedor efectivamente usado tras una búsqueda. */
+export function getActiveHotelProviderLabel(
+  provider: HotelProvider,
+): HotelProviderLabel {
   if (provider instanceof ResilientHotelProvider) {
     return provider.lastProviderUsed === "mock_fallback" ? "mock_fallback" : "duffel";
   }
   return "mock";
+}
+
+/** ¿El proveedor soporta `fetch_all_rates`? (solo Duffel Stays). */
+export function supportsFetchRates(
+  provider: HotelProvider,
+): provider is ResilientHotelProvider {
+  return provider instanceof ResilientHotelProvider;
 }

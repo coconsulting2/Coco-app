@@ -1,15 +1,20 @@
-import AproveReceipStatus from "@components/AproveReceiptsModal";
-import RejectReceipStatus from "@components/RejectReceiptsModal";
+/**
+ * @module ReceiptActions
+ * @description Botones lado a lado Aprobar/Rechazar para UN receipt.
+ * Los modales internos submitean al action de la route padre vía
+ * `useFetcher` — no requiere token ni callbacks (la revalidación del loader
+ * es automática post-submit).
+ */
+import AproveReceipStatus from "~/shared/ui/AproveReceiptsModal";
+import RejectReceipStatus from "~/shared/ui/RejectReceiptsModal";
 
 interface ReceiptProps {
   receipt_id: number;
   request_id: number;
   receipt_type_name?: string;
   disabled?: boolean;
-  expense_status?: string;
   onApprove?: (id: number) => void;
   onReject?: (id: number) => void;
-  token: string;
 }
 
 export default function ReceiptActions({
@@ -17,25 +22,11 @@ export default function ReceiptActions({
   request_id,
   receipt_type_name,
   disabled = false,
-  token,
   onApprove,
   onReject,
 }: ReceiptProps) {
-  const handleApproveSuccess = () => {
-    if (onApprove) {
-      onApprove(receipt_id);
-    } else {
-      window.location.reload();
-    }
-  };
-
-  const handleRejectSuccess = () => {
-    if (onReject) {
-      onReject(receipt_id);
-    } else {
-      window.location.reload();
-    }
-  };
+  const handleApproveSuccess = () => onApprove?.(receipt_id);
+  const handleRejectSuccess = () => onReject?.(receipt_id);
 
   return (
     <div className="flex flex-row gap-2 items-center justify-center w-full">
@@ -43,11 +34,9 @@ export default function ReceiptActions({
         receipt_id={receipt_id}
         title="Aprobar comprobante"
         message="¿Está seguro de que deseas aprobar este comprobante?"
-        redirection=""
         modal_type="success"
         variant="filled"
         disabled={disabled}
-        token={token}
         onSuccess={handleApproveSuccess}
       >
         Aprobar
@@ -58,7 +47,6 @@ export default function ReceiptActions({
         request_id={request_id}
         receipt_type_name={receipt_type_name}
         disabled={disabled}
-        token={token}
         onSuccess={handleRejectSuccess}
       >
         Rechazar

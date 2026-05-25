@@ -5,7 +5,7 @@
  * Table row — 1px separators, hover state, editorial action button.
  */
 
-import type { TableColumn } from "@components/Table/DataTable";
+import type { TableColumn } from "~/shared/ui/Table/DataTable";
 
 interface Props {
   row: Record<string, string | number | boolean>;

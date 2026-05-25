@@ -1,4 +1,3 @@
-import { resolveApiBaseUrl } from "@utils/apiClient.ts";
 import React from "react";
 
 interface Comment {

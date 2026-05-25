@@ -16,3 +16,22 @@ export class HotelSearchError extends HotelsError {
 export class HotelQuoteUnavailableError extends HotelsError {
   constructor(message?: string) { super(message ?? "HotelQuoteUnavailableError", "HOTELQUOTEUNAVAILABLE"); }
 }
+
+/** Rango de fechas inválido (check-out no posterior a check-in). */
+export class InvalidStayDatesError extends HotelsError {
+  constructor(message?: string) {
+    super(message ?? "fecha_salida debe ser posterior a fecha_entrada", "INVALID_STAY_DATES", 400);
+  }
+}
+
+/** Duffel Stays no habilitado en la cuenta (HTTP 503 en el contrato legacy). */
+export class StaysNotEnabledError extends HotelsError {
+  constructor(message?: string) {
+    super(
+      message ??
+        "Duffel Stays no está habilitado en esta cuenta. Contacta a Duffel o usa HOTEL_PROVIDER=mock.",
+      "STAYS_NOT_ENABLED",
+      503,
+    );
+  }
+}

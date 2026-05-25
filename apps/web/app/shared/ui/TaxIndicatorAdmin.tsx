@@ -1,95 +1,53 @@
 /**
  * TaxIndicatorAdmin — CRUD view for tax indicators (M3-008).
  *
- * Lets the accounting admin register, edit and disable tax indicators
- * (clave, descripción, porcentaje, tipo IVA trasladado / IVA retenido /
- * ISR retenido). Indicators referenced by an active ExpenseTypeMapping
- * cannot be deleted.
+ * Prop-driven: recibe los indicadores iniciales + mapeos (para bloquear el
+ * borrado de indicadores en uso) por props (precargados en el loader de
+ * `routes/_app/admin/indicadores-impuesto`) y muta vía `useFetcher` contra la
+ * `action` de esa misma ruta (intents create/update/delete que invocan los
+ * use-cases hex del slice accounts-payable). Cero `apiRequest`/fetch a `/api/*`.
  *
- * Includes a CSV export that hits GET /accounting/export?format=csv when
- * available and falls back to a client-side CSV. Catalogs are scoped by
- * orgId on the server.
+ * Incluye export CSV client-side. Los indicadores referenciados por un
+ * ExpenseTypeMapping activo no pueden eliminarse.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import Button from "@components/Button";
-import Modal from "@components/Modal";
-import Toast from "@components/Toast";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useFetcher } from "react-router";
+import Button from "~/shared/ui/Button";
+import Modal from "~/shared/ui/Modal";
+import Toast from "~/shared/ui/Toast";
 import {
   TAX_INDICATOR_TYPES,
   TAX_INDICATOR_TYPE_LABEL,
   getMappedTaxIndicatorIds,
-} from "@type/AccountingAccount";
+} from "~/shared/types/AccountingAccount";
 import type {
   ExpenseTypeMapping,
   TaxIndicator,
   TaxIndicatorFormErrors,
   TaxIndicatorFormValues,
   TaxIndicatorType,
-} from "@type/AccountingAccount";
-import { apiRequest } from "@utils/apiClient";
-import { downloadCsvWithBackend } from "@utils/csvExport";
+} from "~/shared/types/AccountingAccount";
+import { downloadCsvFromRows } from "~/shared/utils/csvExport";
 
 interface TaxIndicatorAdminProps {
   initialData?: TaxIndicator[];
   initialMappings?: ExpenseTypeMapping[];
-  apiEndpoint?: string;
-  mappingsEndpoint?: string;
-  exportEndpoint?: string;
-  token?: string;
+  /** Token CSRF emitido por el loader; requerido por la `action`. */
+  csrfToken?: string;
 }
+
+/** Resultado tipado de la `action` de `routes/_app/admin/indicadores-impuesto`. */
+type TaxIndicatorActionResult =
+  | { ok: true; intent: "create" | "update"; indicator: TaxIndicator }
+  | { ok: true; intent: "delete"; id: number }
+  | { ok: false; error: string };
 
 type Dialog =
   | { kind: "closed" }
   | { kind: "create" }
   | { kind: "edit"; indicator: TaxIndicator }
   | { kind: "delete"; indicator: TaxIndicator };
-
-const SEED_INDICATORS: TaxIndicator[] = [
-  {
-    tax_indicator_id: 1,
-    org_id: 1,
-    key: "IVA16",
-    description: "IVA 16% acreditable",
-    percentage: 16,
-    type: "IVA_TRASLADADO",
-  },
-  {
-    tax_indicator_id: 2,
-    org_id: 1,
-    key: "IVA08",
-    description: "IVA 8% zona fronteriza",
-    percentage: 8,
-    type: "IVA_TRASLADADO",
-  },
-  {
-    tax_indicator_id: 3,
-    org_id: 1,
-    key: "RET-IVA",
-    description: "Retención de IVA 10.67%",
-    percentage: 10.67,
-    type: "IVA_RETENIDO",
-  },
-  {
-    tax_indicator_id: 4,
-    org_id: 1,
-    key: "RET-ISR",
-    description: "Retención de ISR 10%",
-    percentage: 10,
-    type: "ISR_RETENIDO",
-  },
-];
-
-const SEED_MAPPINGS: ExpenseTypeMapping[] = [
-  {
-    expense_type_mapping_id: 1,
-    org_id: 1,
-    receipt_type_id: 1,
-    cargo_account_id: 1,
-    abono_account_id: 4,
-    tax_indicator_id: 1,
-  },
-];
 
 const emptyForm: TaxIndicatorFormValues = {
   key: "",
@@ -101,67 +59,48 @@ const emptyForm: TaxIndicatorFormValues = {
 export default function TaxIndicatorAdmin({
   initialData,
   initialMappings,
-  apiEndpoint,
-  mappingsEndpoint,
-  exportEndpoint,
-  token,
+  csrfToken,
 }: TaxIndicatorAdminProps) {
-  const [items, setItems] = useState<TaxIndicator[]>(
-    initialData ?? SEED_INDICATORS
-  );
-  const [mappings, setMappings] = useState<ExpenseTypeMapping[]>(
-    initialMappings ?? SEED_MAPPINGS
-  );
+  const fetcher = useFetcher<TaxIndicatorActionResult>();
+  const submitting = fetcher.state !== "idle";
+
+  const [items, setItems] = useState<TaxIndicator[]>(initialData ?? []);
+  const [mappings] = useState<ExpenseTypeMapping[]>(initialMappings ?? []);
   const [dialog, setDialog] = useState<Dialog>({ kind: "closed" });
   const [form, setForm] = useState<TaxIndicatorFormValues>(emptyForm);
   const [errors, setErrors] = useState<TaxIndicatorFormErrors>({});
-  const [submitting, setSubmitting] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [toast, setToast] = useState<
     { message: string; type: "success" | "error" } | null
   >(null);
 
+  // Reconcilia el estado local con el resultado de la action (useFetcher).
   useEffect(() => {
-    if (!apiEndpoint) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const data = await apiRequest<TaxIndicator[]>(apiEndpoint, {
-          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-        });
-        if (!cancelled && Array.isArray(data)) setItems(data);
-      } catch (err) {
-        console.warn(
-          "[TaxIndicatorAdmin] fetch failed, using seed data",
-          err
-        );
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [apiEndpoint, token]);
+    if (fetcher.state !== "idle" || !fetcher.data) return;
+    const data = fetcher.data;
 
-  useEffect(() => {
-    if (!mappingsEndpoint) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const data = await apiRequest<ExpenseTypeMapping[]>(mappingsEndpoint, {
-          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-        });
-        if (!cancelled && Array.isArray(data)) setMappings(data);
-      } catch (err) {
-        console.warn(
-          "[TaxIndicatorAdmin] mappings fetch failed, using seed data",
-          err
-        );
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [mappingsEndpoint, token]);
+    if (data.ok === false) {
+      setToast({ message: data.error, type: "error" });
+      return;
+    }
+    if (data.intent === "create") {
+      setItems((prev) => [...prev, data.indicator]);
+      setToast({ message: "Indicador creado", type: "success" });
+      setDialog({ kind: "closed" });
+    } else if (data.intent === "update") {
+      setItems((prev) =>
+        prev.map((i) =>
+          i.tax_indicator_id === data.indicator.tax_indicator_id ? data.indicator : i,
+        ),
+      );
+      setToast({ message: "Indicador actualizado", type: "success" });
+      setDialog({ kind: "closed" });
+    } else if (data.intent === "delete") {
+      setItems((prev) => prev.filter((i) => i.tax_indicator_id !== data.id));
+      setToast({ message: "Indicador eliminado", type: "success" });
+      setDialog({ kind: "closed" });
+    }
+  }, [fetcher.state, fetcher.data]);
 
   const mappedIds = useMemo(
     () => getMappedTaxIndicatorIds(mappings),
@@ -196,7 +135,6 @@ export default function TaxIndicatorAdmin({
   const closeDialog = () => {
     setDialog({ kind: "closed" });
     setErrors({});
-    setSubmitting(false);
   };
 
   const validate = useCallback(
@@ -240,94 +178,41 @@ export default function TaxIndicatorAdmin({
     [items]
   );
 
-  const handleSubmit = async () => {
+  const submitIntent = (
+    intent: "create" | "update" | "delete",
+    fields: Record<string, string>,
+  ) => {
+    fetcher.submit(
+      { _intent: intent, _csrf: csrfToken ?? "", ...fields },
+      { method: "post" },
+    );
+  };
+
+  const handleSubmit = () => {
     const editingId =
       dialog.kind === "edit" ? dialog.indicator.tax_indicator_id : undefined;
     const nextErrors = validate(form, editingId);
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length > 0) return;
 
-    setSubmitting(true);
-    try {
-      if (dialog.kind === "create") {
-        const payload = {
-          key: form.key.trim(),
-          description: form.description.trim(),
-          percentage: Number(form.percentage),
-          type: form.type,
-        };
-        let created: TaxIndicator | null = null;
-        if (apiEndpoint) {
-          try {
-            created = await apiRequest<TaxIndicator>(apiEndpoint, {
-              method: "POST",
-              data: payload,
-              headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-            });
-          } catch (err) {
-            console.warn(
-              "[TaxIndicatorAdmin] create failed, using local state",
-              err
-            );
-          }
-        }
-        const nextId =
-          created?.tax_indicator_id ??
-          items.reduce((m, i) => Math.max(m, i.tax_indicator_id), 0) + 1;
-        const orgId = created?.org_id ?? items[0]?.org_id ?? 1;
-        setItems((prev) => [
-          ...prev,
-          created ?? {
-            tax_indicator_id: nextId,
-            org_id: orgId,
-            ...payload,
-          },
-        ]);
-        setToast({ message: "Indicador creado", type: "success" });
-      } else if (dialog.kind === "edit") {
-        const payload = {
-          key: form.key.trim(),
-          description: form.description.trim(),
-          percentage: Number(form.percentage),
-          type: form.type,
-        };
-        if (apiEndpoint) {
-          try {
-            await apiRequest(
-              `${apiEndpoint}/${dialog.indicator.tax_indicator_id}`,
-              {
-                method: "PUT",
-                data: payload,
-                headers: token
-                  ? { Authorization: `Bearer ${token}` }
-                  : undefined,
-              }
-            );
-          } catch (err) {
-            console.warn(
-              "[TaxIndicatorAdmin] update failed, using local state",
-              err
-            );
-          }
-        }
-        setItems((prev) =>
-          prev.map((i) =>
-            i.tax_indicator_id === dialog.indicator.tax_indicator_id
-              ? { ...i, ...payload }
-              : i
-          )
-        );
-        setToast({ message: "Indicador actualizado", type: "success" });
-      }
-      closeDialog();
-    } catch (err) {
-      console.error(err);
-      setToast({ message: "Error al guardar los cambios", type: "error" });
-      setSubmitting(false);
+    const fields = {
+      key: form.key.trim(),
+      description: form.description.trim(),
+      percentage: String(Number(form.percentage)),
+      type: form.type,
+    };
+
+    if (dialog.kind === "create") {
+      submitIntent("create", fields);
+    } else if (dialog.kind === "edit") {
+      submitIntent("update", {
+        id: String(dialog.indicator.tax_indicator_id),
+        ...fields,
+      });
     }
   };
 
-  const handleDelete = async () => {
+  const handleDelete = () => {
     if (dialog.kind !== "delete") return;
     const id = dialog.indicator.tax_indicator_id;
 
@@ -340,37 +225,14 @@ export default function TaxIndicatorAdmin({
       closeDialog();
       return;
     }
-
-    setSubmitting(true);
-    if (apiEndpoint) {
-      try {
-        await apiRequest(`${apiEndpoint}/${id}`, {
-          method: "PUT",
-          data: { active: false },
-          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-        });
-      } catch (err) {
-        console.warn(
-          "[TaxIndicatorAdmin] delete failed, using local state",
-          err
-        );
-      }
-    }
-    setItems((prev) => prev.filter((i) => i.tax_indicator_id !== id));
-    setToast({ message: "Indicador eliminado", type: "success" });
-    closeDialog();
+    submitIntent("delete", { id: String(id) });
   };
 
-  const handleExport = async () => {
+  const handleExport = () => {
     setExporting(true);
     try {
-      await downloadCsvWithBackend({
-        apiEndpoint: exportEndpoint,
-        entity: "tax-indicators",
-        token,
-        filename: `indicadores-impuesto-${new Date()
-          .toISOString()
-          .slice(0, 10)}.csv`,
+      downloadCsvFromRows({
+        filename: `indicadores-impuesto-${new Date().toISOString().slice(0, 10)}.csv`,
         columns: [
           { key: "key", header: "Clave" },
           { key: "description", header: "Descripción" },
@@ -378,7 +240,7 @@ export default function TaxIndicatorAdmin({
           { key: "type", header: "Tipo" },
           { key: "in_use", header: "En uso" },
         ],
-        fallbackRows: sortedItems.map((indicator) => ({
+        rows: sortedItems.map((indicator) => ({
           key: indicator.key,
           description: indicator.description,
           percentage: indicator.percentage,

@@ -1,27 +1,58 @@
 /**
- * Author: Emiliano Deyta Illescas
+ * Author: Emiliano Deyta Illescas (migrado a RR7 prop-driven + useFetcher)
  *
  * Description:
- * Unit tests for SimuladorWorkflow. Covers the initial render of the
- * parameters form, the validation error path for an invalid amount,
- * the success path that prefers the remote API response when one is
- * available, the local-fallback path that runs the bundled rule set
- * when the API call fails, and the reset button clearing the
- * previous result.
+ * Unit tests for SimuladorWorkflow. El componente ya no consume `apiRequest`:
+ * envía los parámetros al `action` de la ruta vía `useFetcher`, y el action
+ * delega en el use-case hex `simulateWorkflow` (adapter `LocalWorkflowSimulator`).
+ * Los tests montan el componente dentro de un `createRoutesStub` cuyo action
+ * ejerce el simulador real, preservando las aserciones de negocio: render
+ * inicial, validación de monto, escalación por monto, auto-aprobación, paso de
+ * tesorería para destino internacional y reset del formulario.
  */
 
 import { describe, it, expect } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { http, HttpResponse } from "msw";
+import { createRoutesStub } from "react-router";
 import SimuladorWorkflow from "@components/SimuladorWorkflow";
-import { server } from "../mocks/server";
+import { LocalWorkflowSimulator } from "~/contexts/workflow/infrastructure/LocalWorkflowSimulator";
+import type {
+  SimDestinationKind,
+  SimExpenseType,
+} from "~/contexts/workflow/domain/entities/WorkflowSimulation";
 
-const API = "https://localhost:3000/api";
+const simulator = new LocalWorkflowSimulator();
+
+function renderSimulator() {
+  const Stub = createRoutesStub([
+    {
+      path: "/",
+      Component: SimuladorWorkflow,
+      async action({ request }) {
+        const fd = await request.formData();
+        const monto = Number(fd.get("monto"));
+        if (!Number.isFinite(monto) || monto <= 0) {
+          return Response.json(
+            { ok: false, error: "Ingresa un monto mayor a cero." },
+            { status: 400 },
+          );
+        }
+        const result = simulator.simulate({
+          monto,
+          tipo_gasto: String(fd.get("tipo_gasto")) as SimExpenseType,
+          destino: String(fd.get("destino")) as SimDestinationKind,
+        });
+        return Response.json({ ok: true, result });
+      },
+    },
+  ]);
+  return render(<Stub initialEntries={["/"]} />);
+}
 
 describe("SimuladorWorkflow", () => {
   it("renders the parameters form with the default values", () => {
-    render(<SimuladorWorkflow />);
+    renderSimulator();
     expect(
       screen.getByRole("heading", { name: /simulación de flujo de aprobación/i }),
     ).toBeInTheDocument();
@@ -33,7 +64,7 @@ describe("SimuladorWorkflow", () => {
 
   it("shows a validation error and clears any previous result when monto is zero or negative", async () => {
     const user = userEvent.setup();
-    render(<SimuladorWorkflow />);
+    renderSimulator();
 
     const monto = screen.getByLabelText(/monto/i);
     await user.clear(monto);
@@ -46,46 +77,9 @@ describe("SimuladorWorkflow", () => {
     expect(screen.queryByText(/ruta de aprobación/i)).not.toBeInTheDocument();
   });
 
-  it("shows the remote simulation result when the API call succeeds", async () => {
-    server.use(
-      http.post(`${API}/workflow/simulate`, () =>
-        HttpResponse.json({
-          input: { monto: 15000, tipo_gasto: "viaje_nacional", destino: "nacional" },
-          steps: [
-            {
-              level: 1,
-              role: "remote",
-              role_label: "Aprobador remoto",
-              limit: 50000,
-              status: "pending",
-            },
-          ],
-          total_levels: 1,
-          auto_approved: false,
-          escalation_triggered: false,
-          summary: "Respuesta del backend simulada.",
-        }),
-      ),
-    );
+  it("escalates through N1 → N2 → director for a large amount", async () => {
     const user = userEvent.setup();
-    render(<SimuladorWorkflow apiEndpoint="/workflow/simulate" token="t" />);
-    await user.click(screen.getByRole("button", { name: /simular flujo/i }));
-
-    expect(
-      await screen.findByText(/respuesta del backend simulada/i),
-    ).toBeInTheDocument();
-    expect(screen.getByText("Aprobador remoto")).toBeInTheDocument();
-    expect(screen.getByText("1 nivel")).toBeInTheDocument();
-  });
-
-  it("falls back to the local rule set when the API endpoint fails", async () => {
-    server.use(
-      http.post(`${API}/workflow/simulate`, () =>
-        HttpResponse.json({ error: "down" }, { status: 500 }),
-      ),
-    );
-    const user = userEvent.setup();
-    render(<SimuladorWorkflow apiEndpoint="/workflow/simulate" />);
+    renderSimulator();
 
     const monto = screen.getByLabelText(/monto/i);
     await user.clear(monto);
@@ -98,14 +92,9 @@ describe("SimuladorWorkflow", () => {
     expect(screen.getAllByText(/escalación/i).length).toBeGreaterThan(0);
   });
 
-  it("auto-approves a small national non-international expense via the local fallback", async () => {
-    server.use(
-      http.post(`${API}/workflow/simulate`, () =>
-        HttpResponse.json({ error: "down" }, { status: 500 }),
-      ),
-    );
+  it("auto-approves a small national non-international expense", async () => {
     const user = userEvent.setup();
-    render(<SimuladorWorkflow apiEndpoint="/workflow/simulate" />);
+    renderSimulator();
 
     const monto = screen.getByLabelText(/monto/i);
     await user.clear(monto);
@@ -118,13 +107,8 @@ describe("SimuladorWorkflow", () => {
   });
 
   it("appends a treasury step when destination is international", async () => {
-    server.use(
-      http.post(`${API}/workflow/simulate`, () =>
-        HttpResponse.json({ error: "down" }, { status: 500 }),
-      ),
-    );
     const user = userEvent.setup();
-    render(<SimuladorWorkflow apiEndpoint="/workflow/simulate" />);
+    renderSimulator();
 
     await user.selectOptions(screen.getByLabelText(/destino/i), "internacional");
     await user.click(screen.getByRole("button", { name: /simular flujo/i }));
@@ -133,22 +117,16 @@ describe("SimuladorWorkflow", () => {
   });
 
   it("clears the result and resets the form when the limpiar button is clicked", async () => {
-    server.use(
-      http.post(`${API}/workflow/simulate`, () =>
-        HttpResponse.json({ error: "down" }, { status: 500 }),
-      ),
-    );
     const user = userEvent.setup();
-    render(<SimuladorWorkflow apiEndpoint="/workflow/simulate" />);
+    renderSimulator();
 
+    const monto = screen.getByLabelText(/monto/i);
+    await user.clear(monto);
+    await user.type(monto, "150000");
     await user.click(screen.getByRole("button", { name: /simular flujo/i }));
     await waitFor(() => {
       expect(screen.getByText("Autorizador N1")).toBeInTheDocument();
     });
-
-    const monto = screen.getByLabelText(/monto/i);
-    await user.clear(monto);
-    await user.type(monto, "999");
 
     await user.click(screen.getByRole("button", { name: /limpiar/i }));
 

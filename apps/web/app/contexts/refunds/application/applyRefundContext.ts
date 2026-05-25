@@ -3,8 +3,6 @@
  * @description Helper invocado al crear/confirmar una solicitud para llenar
  * Request.tripEndDate y Request.policyEvaluationSnapshot (M2-006 RF-46).
  */
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore — policies slice pending hexagonal refactor (sesión H)
 import { snapshotPolicyForRequest } from "~/contexts/policies/application/policyService.js";
 
 const HOME_COUNTRY_ID = 1;

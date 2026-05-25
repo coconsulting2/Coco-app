@@ -1,18 +1,20 @@
-// @ts-nocheck — bulk-converted legacy; typed properly is M9 follow-up
 /**
  * @module importRoleResolution
  * @description Resuelve el rol destino mezclando: alias internos, mapa embebido en el JSON
  *   y (en apply) el mapa enviado desde el front para etiquetas de otras empresas.
  */
-import { resolveCanonicalRoleName } from "./roleAliasResolver.js";
+import { resolveCanonicalRoleName } from "~/contexts/onboarding/application/roleAliasResolver";
 
 /**
- * @param {string} rawRole - Texto del archivo (ej. "Approver", "cxp")
- * @param {string[]} validRoleNames - Roles existentes en la org
- * @param {Record<string, string>} [fileMappings] - roleMappings del JSON raíz (opcional)
- * @returns {{ mappedRoleName: string | null, externalRoleLabel: string | null }}
+ * @param rawRole Texto del archivo (ej. "Approver", "cxp").
+ * @param validRoleNames Roles existentes en la org.
+ * @param fileMappings roleMappings del JSON raíz (opcional).
  */
-export function resolveImportRole(rawRole, validRoleNames, fileMappings = {}) {
+export function resolveImportRole(
+  rawRole: string,
+  validRoleNames: string[],
+  fileMappings: Record<string, string> = {},
+): { mappedRoleName: string | null; externalRoleLabel: string | null } {
   const raw = String(rawRole ?? "").trim();
   if (!raw) return { mappedRoleName: null, externalRoleLabel: null };
 
@@ -22,7 +24,7 @@ export function resolveImportRole(rawRole, validRoleNames, fileMappings = {}) {
   let canonical = lowerValid.get(resolved.toLowerCase());
   if (canonical) return { mappedRoleName: canonical, externalRoleLabel: null };
 
-  let targetFromFile = null;
+  let targetFromFile: string | null = null;
   for (const [key, val] of Object.entries(fileMappings)) {
     if (String(key).trim().toLowerCase() === raw.toLowerCase()) {
       targetFromFile = String(val ?? "").trim();
@@ -44,12 +46,12 @@ export function resolveImportRole(rawRole, validRoleNames, fileMappings = {}) {
 
 /**
  * Normaliza el nombre de rol elegido en UI contra el catálogo de la org.
- *
- * @param {string} pickedRoleName - Rol elegido en CocoConsulting (nombre en catálogo)
- * @param {string[]} validRoleNames
- * @returns {string | null} Nombre canónico en la org o null
+ * @returns Nombre canónico en la org o null.
  */
-export function resolveManualRoleMapping(pickedRoleName, validRoleNames) {
+export function resolveManualRoleMapping(
+  pickedRoleName: string | null | undefined,
+  validRoleNames: string[],
+): string | null {
   const raw = String(pickedRoleName ?? "").trim();
   if (!raw) return null;
 

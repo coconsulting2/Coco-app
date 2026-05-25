@@ -1,33 +1,40 @@
 /**
  * CostCenterAdmin — CRUD view for hierarchical cost centers.
- * Reusable component planned for reuse in M3 dashboards.
  *
- * Currently operates on client-side state; API integration wired through
- * the `apiEndpoint` prop once M3-005 (cost-centers API) is delivered.
+ * Prop-driven: recibe los centros iniciales por props (precargados en el loader
+ * de `routes/_app/admin/cost-centers`) y muta vía `useFetcher` contra la
+ * `action` de esa misma ruta (intents create/update/delete que invocan los
+ * use-cases hex del slice accounts-payable). Cero `apiRequest`/fetch a `/api/*`.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import Button from "@components/Button";
-import Modal from "@components/Modal";
-import Toast from "@components/Toast";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useFetcher } from "react-router";
+import Button from "~/shared/ui/Button";
+import Modal from "~/shared/ui/Modal";
+import Toast from "~/shared/ui/Toast";
 import {
   buildCostCenterTree,
   flattenCostCenterTree,
   getDescendantIds,
-} from "@type/CostCenter";
+} from "~/shared/types/CostCenter";
 import type {
   CostCenter,
   CostCenterFormErrors,
   CostCenterFormValues,
   CostCenterNode,
-} from "@type/CostCenter";
-import { apiRequest } from "@utils/apiClient";
+} from "~/shared/types/CostCenter";
 
 interface CostCenterAdminProps {
   initialData?: CostCenter[];
-  apiEndpoint?: string;
-  token?: string;
+  /** Token CSRF emitido por el loader; requerido por la `action`. */
+  csrfToken?: string;
 }
+
+/** Resultado tipado de la `action` de `routes/_app/admin/cost-centers`. */
+type CostCenterActionResult =
+  | { ok: true; intent: "create" | "update"; costCenter: CostCenter }
+  | { ok: true; intent: "delete"; id: number }
+  | { ok: false; error: string };
 
 type DialogMode =
   | { kind: "closed" }
@@ -35,51 +42,57 @@ type DialogMode =
   | { kind: "edit"; cc: CostCenter }
   | { kind: "delete"; cc: CostCenter };
 
-const SEED_DATA: CostCenter[] = [
-  { cost_center_id: 1, code: "CC-100", name: "Corporativo", parent_id: null },
-  { cost_center_id: 2, code: "CC-110", name: "Finanzas", parent_id: 1 },
-  { cost_center_id: 3, code: "CC-111", name: "Tesorería", parent_id: 2 },
-  { cost_center_id: 4, code: "CC-120", name: "Recursos Humanos", parent_id: 1 },
-  { cost_center_id: 5, code: "CC-200", name: "Operaciones", parent_id: null },
-  { cost_center_id: 6, code: "CC-210", name: "Logística", parent_id: 5 },
-];
-
 const emptyForm: CostCenterFormValues = { code: "", name: "", parent_id: null };
 
 export default function CostCenterAdmin({
   initialData,
-  apiEndpoint,
-  token,
+  csrfToken,
 }: CostCenterAdminProps) {
-  const [items, setItems] = useState<CostCenter[]>(initialData ?? SEED_DATA);
+  const fetcher = useFetcher<CostCenterActionResult>();
+  const submitting = fetcher.state !== "idle";
+  const pendingDeleteIds = useRef<Set<number> | null>(null);
+
+  const [items, setItems] = useState<CostCenter[]>(initialData ?? []);
   const [dialog, setDialog] = useState<DialogMode>({ kind: "closed" });
   const [form, setForm] = useState<CostCenterFormValues>(emptyForm);
   const [errors, setErrors] = useState<CostCenterFormErrors>({});
-  const [submitting, setSubmitting] = useState(false);
   const [toast, setToast] = useState<
     { message: string; type: "success" | "error" } | null
   >(null);
 
-  useEffect(() => {
-    if (!apiEndpoint) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const data = await apiRequest<CostCenter[]>(apiEndpoint, {
-          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-        });
-        if (!cancelled && Array.isArray(data)) setItems(data);
-      } catch (err) {
-        console.warn("[CostCenterAdmin] fetch failed, using seed data", err);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [apiEndpoint, token]);
-
   const tree = useMemo(() => buildCostCenterTree(items), [items]);
   const flat = useMemo(() => flattenCostCenterTree(tree), [tree]);
+
+  // Reconcilia el estado local con el resultado de la action (useFetcher).
+  useEffect(() => {
+    if (fetcher.state !== "idle" || !fetcher.data) return;
+    const data = fetcher.data;
+
+    if (data.ok === false) {
+      setToast({ message: data.error, type: "error" });
+      pendingDeleteIds.current = null;
+      return;
+    }
+    if (data.intent === "create") {
+      setItems((prev) => [...prev, data.costCenter]);
+      setToast({ message: "Centro de costos creado", type: "success" });
+      setDialog({ kind: "closed" });
+    } else if (data.intent === "update") {
+      setItems((prev) =>
+        prev.map((i) =>
+          i.cost_center_id === data.costCenter.cost_center_id ? data.costCenter : i,
+        ),
+      );
+      setToast({ message: "Centro de costos actualizado", type: "success" });
+      setDialog({ kind: "closed" });
+    } else if (data.intent === "delete") {
+      const removed = pendingDeleteIds.current ?? new Set<number>([data.id]);
+      pendingDeleteIds.current = null;
+      setItems((prev) => prev.filter((i) => !removed.has(i.cost_center_id)));
+      setToast({ message: "Centro de costos eliminado", type: "success" });
+      setDialog({ kind: "closed" });
+    }
+  }, [fetcher.state, fetcher.data]);
 
   const parentOptions = useMemo<CostCenterNode[]>(() => {
     if (dialog.kind !== "edit") return flat;
@@ -102,7 +115,6 @@ export default function CostCenterAdmin({
   const closeDialog = () => {
     setDialog({ kind: "closed" });
     setErrors({});
-    setSubmitting(false);
   };
 
   const validate = useCallback(
@@ -134,92 +146,41 @@ export default function CostCenterAdmin({
     [items]
   );
 
-  const handleSubmit = async () => {
+  const submitIntent = (
+    intent: "create" | "update" | "delete",
+    fields: Record<string, string>,
+  ) => {
+    fetcher.submit(
+      { _intent: intent, _csrf: csrfToken ?? "", ...fields },
+      { method: "post" },
+    );
+  };
+
+  const handleSubmit = () => {
     const editingId =
       dialog.kind === "edit" ? dialog.cc.cost_center_id : undefined;
     const nextErrors = validate(form, editingId);
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length > 0) return;
 
-    setSubmitting(true);
-    try {
-      if (dialog.kind === "create") {
-        const payload = {
-          code: form.code.trim(),
-          name: form.name.trim(),
-          parent_id: form.parent_id,
-        };
-        let created: CostCenter | null = null;
-        if (apiEndpoint) {
-          try {
-            created = await apiRequest<CostCenter>(apiEndpoint, {
-              method: "POST",
-              data: payload,
-              headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-            });
-          } catch (err) {
-            console.warn("[CostCenterAdmin] create failed, using local state", err);
-          }
-        }
-        const nextId =
-          created?.cost_center_id ??
-          (items.reduce((m, i) => Math.max(m, i.cost_center_id), 0) + 1);
-        setItems((prev) => [
-          ...prev,
-          created ?? { cost_center_id: nextId, ...payload },
-        ]);
-        setToast({ message: "Centro de costos creado", type: "success" });
-      } else if (dialog.kind === "edit") {
-        const payload = {
-          code: form.code.trim(),
-          name: form.name.trim(),
-          parent_id: form.parent_id,
-        };
-        if (apiEndpoint) {
-          try {
-            await apiRequest(`${apiEndpoint}/${dialog.cc.cost_center_id}`, {
-              method: "PUT",
-              data: payload,
-              headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-            });
-          } catch (err) {
-            console.warn("[CostCenterAdmin] update failed, using local state", err);
-          }
-        }
-        setItems((prev) =>
-          prev.map((i) =>
-            i.cost_center_id === dialog.cc.cost_center_id ? { ...i, ...payload } : i
-          )
-        );
-        setToast({ message: "Centro de costos actualizado", type: "success" });
-      }
-      closeDialog();
-    } catch (err) {
-      console.error(err);
-      setToast({ message: "Error al guardar los cambios", type: "error" });
-      setSubmitting(false);
+    const fields = {
+      code: form.code.trim(),
+      name: form.name.trim(),
+      parent_id: form.parent_id == null ? "" : String(form.parent_id),
+    };
+
+    if (dialog.kind === "create") {
+      submitIntent("create", fields);
+    } else if (dialog.kind === "edit") {
+      submitIntent("update", { id: String(dialog.cc.cost_center_id), ...fields });
     }
   };
 
-  const handleDelete = async () => {
+  const handleDelete = () => {
     if (dialog.kind !== "delete") return;
-    setSubmitting(true);
     const id = dialog.cc.cost_center_id;
-    const descendants = getDescendantIds(tree, id);
-    if (apiEndpoint) {
-      try {
-        await apiRequest(`${apiEndpoint}/${id}`, {
-          method: "PUT",
-          data: { active: false },
-          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-        });
-      } catch (err) {
-        console.warn("[CostCenterAdmin] delete failed, using local state", err);
-      }
-    }
-    setItems((prev) => prev.filter((i) => !descendants.has(i.cost_center_id)));
-    setToast({ message: "Centro de costos eliminado", type: "success" });
-    closeDialog();
+    pendingDeleteIds.current = getDescendantIds(tree, id);
+    submitIntent("delete", { id: String(id) });
   };
 
   const dialogOpen = dialog.kind !== "closed";

@@ -1,51 +1,91 @@
-// @ts-nocheck — dispatcher legacy bound to pre-hex services; M9 follow-up
 /**
  * @module hotelsApi.server
- * @description Dispatcher /api/hotels/*. Réplica del controller legacy.
- * Cada loader/action de RR v7 in-app debería preferir DI directo a los
- * use-cases del slice; este resource route se conserva para compatibilidad
- * con componentes legacy y contrato OpenAPI.
+ * @description Dispatcher /api/hotels/*. Réplica de los controllers legacy
+ * `postHotelSearch` y `postHotelFetchRates`. Para flujos in-app nuevos,
+ * prefiere DI directo a los use-cases `searchHotels` / `fetchHotelRates`.
  */
 import { jsonOk, jsonError, jsonFromError } from "~/platform/http/responses";
-import { requireSession, requirePermissions, runInTenant } from "~/platform/session/requireUser.server";
+import {
+  requireSession,
+  runInTenant,
+} from "~/platform/session/requireUser.server";
 import { assertCsrf } from "~/platform/csrf/csrf.server";
-
-import * as hotelProvider from "~/contexts/hotels/infrastructure/hotelProvider.js";
+import { searchHotels, fetchHotelRates } from "~/contexts/hotels";
+import type {
+  StaySearchInputApp,
+  NormalizedStayOffer,
+} from "@coco/integrations/duffel";
 
 type DispatchArgs = { request: Request; subpath: string };
 
-const ROUTES: Array<{ method: string; pattern: RegExp; perm: string | null; handler: (m: RegExpMatchArray, ctx: any) => Promise<unknown> | unknown }> = [
-  { method: "POST", pattern: /^search$/, perm: null, handler: async (m, { session, body, url }) => hotelProvider.default?.search?.(body) ?? hotelProvider.search?.(body) },
-  { method: "GET", pattern: /^quote\/([\w-]+)$/, perm: null, handler: async (m, { session, body, url }) => hotelProvider.default?.quote?.(m[1]) ?? hotelProvider.quote?.(m[1]) },
-];
+/** Body legacy de POST /api/hotels/search (claves en español). */
+type HotelSearchBody = {
+  ciudad?: unknown;
+  fecha_entrada?: unknown;
+  fecha_salida?: unknown;
+  huespedes?: unknown;
+};
 
-export async function dispatchHotelsApi({ request, subpath }: DispatchArgs): Promise<Response> {
+type HotelRatesBody = { base_offer?: unknown };
+
+function mapSearchBody(body: HotelSearchBody | null): StaySearchInputApp {
+  return {
+    ciudad: String(body?.ciudad ?? ""),
+    fechaEntrada: String(body?.fecha_entrada ?? ""),
+    fechaSalida: String(body?.fecha_salida ?? ""),
+    huespedes: Number(body?.huespedes) || 1,
+  };
+}
+
+const RATES_PATTERN = /^search-results\/([\w-]+)\/rates$/;
+
+export async function dispatchHotelsApi({
+  request,
+  subpath,
+}: DispatchArgs): Promise<Response> {
   const method = request.method.toUpperCase();
   const path = subpath.split("?")[0] ?? "";
-  const url = new URL(request.url);
 
   try {
-    for (const r of ROUTES) {
-      if (r.method !== method) continue;
-      const m = path.match(r.pattern);
-      if (!m) continue;
-      const session = r.perm
-        ? await requirePermissions(request, r.perm)
-        : await requireSession(request);
-      if (method !== "GET" && method !== "HEAD") {
-        await assertCsrf(request);
-      }
-      const body = (method !== "GET" && method !== "HEAD") ? await readJson(request) : null;
-      const result = await runInTenant(session, async () => r.handler(m, { session, body, url }));
-      return jsonOk(result ?? { ok: true });
+    if (method === "POST" && path === "search") {
+      const session = await requireSession(request);
+      await assertCsrf(request);
+      const body = (await readJson(request)) as HotelSearchBody | null;
+      const result = await runInTenant(session, () =>
+        searchHotels(mapSearchBody(body)),
+      );
+      return jsonOk(result);
     }
-    return jsonError(404, `Unknown hotels endpoint: ${method} ${path}`, "UNKNOWN_ENDPOINT");
+
+    const ratesMatch = path.match(RATES_PATTERN);
+    if (method === "POST" && ratesMatch) {
+      const session = await requireSession(request);
+      await assertCsrf(request);
+      const body = (await readJson(request)) as HotelRatesBody | null;
+      const baseOffer = body?.base_offer;
+      if (!baseOffer || typeof baseOffer !== "object") {
+        return jsonError(400, "base_offer requerido", "VALIDATION");
+      }
+      const result = await runInTenant(session, () =>
+        fetchHotelRates({
+          searchResultId: ratesMatch[1] ?? "",
+          baseOffer: baseOffer as NormalizedStayOffer,
+        }),
+      );
+      return jsonOk(result);
+    }
+
+    return jsonError(
+      404,
+      `Unknown hotels endpoint: ${method} ${path}`,
+      "UNKNOWN_ENDPOINT",
+    );
   } catch (err) {
     return jsonFromError(err);
   }
 }
 
-async function readJson(request: Request): Promise<any | null> {
+async function readJson(request: Request): Promise<unknown> {
   try {
     const text = await request.text();
     if (!text) return null;

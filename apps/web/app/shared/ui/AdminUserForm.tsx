@@ -1,17 +1,22 @@
 /**
- * Author: Michael devlyn 
- * 
- * Description: React component for creating new users in the admin panel.
+ * AdminUserForm — formulario de alta/edición de usuarios para el panel admin.
+ *
+ * Prop-driven y sin `apiRequest`: las opciones de rol/departamento llegan por
+ * props (precargadas por el loader de la ruta que lo renderiza) y el submit
+ * usa `useFetcher` apuntando a las actions RR7 ya existentes de
+ * `crear-usuario` / `editar-usuario.$id` (que invocan los use-cases hex del
+ * slice identity). No duplica use-cases: consume la API pública del slice vía
+ * esas actions.
  */
 
-import React, { useState, useEffect } from 'react';
-import Button from '@components/Button';
-import { apiRequest } from '@utils/apiClient';
-import Toast from '@components/Toast';
+import React, { useEffect, useState } from "react";
+import { useFetcher } from "react-router";
+import Button from "~/shared/ui/Button";
+import Toast from "~/shared/ui/Toast";
 
 interface FormData {
-  role_id: number | '';
-  department_id: number | '';
+  role_id: number | "";
+  department_id: number | "";
   user_name: string;
   password: string;
   workstation: string;
@@ -23,189 +28,188 @@ interface FormErrors {
   [key: string]: string;
 }
 
-interface CreateUserFormProps {
-  mode: 'create' | 'edit';
-  user_data?: any; // User data for editing, if applicable
-  redirectTo?: string;
-  token: string; // Authorization token for API requests
+export interface AdminUserFormOption {
+  id: number;
+  name: string;
 }
 
-const roles = [
-  { id: 1, name: 'Solicitante' },
-  { id: 2, name: 'Agencia de viajes' },
-  { id: 3, name: 'Cuentas por pagar' },
-  { id: 4, name: 'N1' },
-  { id: 5, name: 'N2' },
-  { id: 6, name: 'Administrador' }
-];
+export interface AdminUserFormUserData {
+  user_id: number;
+  user_name: string;
+  email: string;
+  phone_number?: string | null;
+  workstation: string;
+  role_name?: string;
+  department_name?: string;
+}
 
-const departments = [
-  { id: 1, name: 'Finanzas' },
-  { id: 2, name: 'Recursos Humanos' },
-  { id: 3, name: 'IT' },
-  { id: 4, name: 'Marketing' },
-  { id: 5, name: 'Operaciones' },
-  { id: 6, name: 'Administración' }
-];
+interface AdminUserFormProps {
+  mode: "create" | "edit";
+  /** Roles del tenant (precargados por el loader). */
+  roles: AdminUserFormOption[];
+  /** Departamentos del tenant (precargados por el loader). */
+  departments: AdminUserFormOption[];
+  /** Token CSRF emitido por el loader; requerido por las actions. */
+  csrfToken: string;
+  /** Datos del usuario a editar (solo `mode==="edit"`). */
+  userData?: AdminUserFormUserData;
+  redirectTo?: string;
+}
 
-const initialFormData: FormData = {
-  role_id: '',
-  department_id: '',
-  user_name: '',
-  password: '',
-  workstation: '',
-  email: '',
-  phone_number: ''
-};
+type ActionResult = { ok: true } | { ok: false; error: string };
 
-export default function CreateUserForm({ mode, user_data, redirectTo,token }: CreateUserFormProps) {
+function initialFormData(): FormData {
+  return {
+    role_id: "",
+    department_id: "",
+    user_name: "",
+    password: "",
+    workstation: "",
+    email: "",
+    phone_number: "",
+  };
+}
+
+export default function AdminUserForm({
+  mode,
+  roles,
+  departments,
+  csrfToken,
+  userData,
+  redirectTo,
+}: AdminUserFormProps) {
+  const fetcher = useFetcher<ActionResult>();
+  const isSubmitting = fetcher.state !== "idle";
+
   const [formData, setFormData] = useState<FormData>(initialFormData);
   const [errors, setErrors] = useState<FormErrors>({});
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
 
   useEffect(() => {
-    if (mode === 'edit' && user_data) {
+    if (mode === "edit" && userData) {
       setFormData({
-        role_id: roles.find(role => role.name === user_data.role_name)?.id ?? '',
-        department_id: departments.find(dep => dep.name === user_data.department_name)?.id ?? '',
-        user_name: user_data.user_name,
-        password: '', // Password should not be pre-filled
-        workstation: user_data.workstation,
-        email: user_data.email,
-        phone_number: user_data.phone_number || ''
+        role_id: roles.find((r) => r.name === userData.role_name)?.id ?? "",
+        department_id:
+          departments.find((d) => d.name === userData.department_name)?.id ?? "",
+        user_name: userData.user_name,
+        password: "",
+        workstation: userData.workstation,
+        email: userData.email,
+        phone_number: userData.phone_number ?? "",
       });
     } else {
-      setFormData(initialFormData);
+      setFormData(initialFormData());
     }
-  }, [mode, user_data]);
+  }, [mode, userData, roles, departments]);
 
-  
+  // Reacciona al resultado de la action RR7.
+  useEffect(() => {
+    if (fetcher.state !== "idle" || !fetcher.data) return;
+    const data = fetcher.data;
+    if (data.ok === false) {
+      setToast({ message: data.error, type: "error" });
+      return;
+    }
+    setToast({
+      message: `Usuario ${mode === "edit" ? "actualizado" : "creado"} exitosamente`,
+      type: "success",
+    });
+    if (mode === "create") setFormData(initialFormData());
+    if (redirectTo) window.location.href = redirectTo;
+  }, [fetcher.state, fetcher.data, mode, redirectTo]);
 
   const validateForm = (): boolean => {
     const newErrors: FormErrors = {};
 
-    // Required field validation
     if (!formData.user_name.trim()) {
-      newErrors.user_name = 'El nombre de usuario es requerido';
-    } else if (formData.user_name.includes(' ')) {
-      newErrors.user_name = 'El nombre de usuario no puede contener espacios';
+      newErrors.user_name = "El nombre de usuario es requerido";
+    } else if (formData.user_name.includes(" ")) {
+      newErrors.user_name = "El nombre de usuario no puede contener espacios";
     }
 
-    if (mode === 'create') {
+    if (mode === "create") {
       if (!formData.password.trim()) {
-        newErrors.password = 'La contraseña es requerida';
-      } else if (formData.password.includes(' ')) {
-        newErrors.password = 'La contraseña no puede contener espacios';
+        newErrors.password = "La contraseña es requerida";
+      } else if (formData.password.includes(" ")) {
+        newErrors.password = "La contraseña no puede contener espacios";
       }
     }
 
     if (!formData.email.trim()) {
-      newErrors.email = 'El email es requerido';
+      newErrors.email = "El email es requerido";
     } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email)) {
-      newErrors.email = 'El email debe tener un formato válido';
+      newErrors.email = "El email debe tener un formato válido";
     }
 
     if (!formData.workstation.trim()) {
-      newErrors.workstation = 'La estación de trabajo es requerida';
+      newErrors.workstation = "La estación de trabajo es requerida";
     }
 
     if (!formData.role_id) {
-      newErrors.role_id = 'El rol es requerido';
+      newErrors.role_id = "El rol es requerido";
     }
 
     if (!formData.department_id) {
-      newErrors.department_id = 'El departamento es requerido';
+      newErrors.department_id = "El departamento es requerido";
     }
 
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+  const handleInputChange = (
+    e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>,
+  ) => {
     const { name, value } = e.target;
-    setFormData(prev => ({
+    setFormData((prev) => ({
       ...prev,
-      [name]: name === 'role_id' || name === 'department_id' ? 
-        (value === '' ? '' : parseInt(value)) : value
+      [name]:
+        name === "role_id" || name === "department_id"
+          ? value === ""
+            ? ""
+            : parseInt(value, 10)
+          : value,
     }));
-
-    // Clear error when user starts typing
     if (errors[name]) {
-      setErrors(prev => ({ ...prev, [name]: '' }));
+      setErrors((prev) => ({ ...prev, [name]: "" }));
     }
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    
     if (!validateForm()) {
-      setToast({ message: 'Por favor corrige los errores en el formulario', type: 'error' });
+      setToast({ message: "Por favor corrige los errores en el formulario", type: "error" });
       return;
     }
-
-    setIsSubmitting(true);
     setToast(null);
-    
-    try {
-      const payload = mode === 'edit'
-        ? { ...formData, ...(formData.password ? {} : { password: undefined }) }
-        : formData;
 
-      const endpoint = mode === 'edit'
-        ? `/admin/update-user/${user_data.user_id}`
-        : '/admin/create-user';
+    const fields: Record<string, string> = {
+      _csrf: csrfToken,
+      user_name: formData.user_name,
+      email: formData.email,
+      phone_number: formData.phone_number,
+      workstation: formData.workstation,
+      role_id: String(formData.role_id),
+      department_id: String(formData.department_id),
+    };
+    if (formData.password) fields.password = formData.password;
 
-      console.log('Submitting form data:', payload);
-      const response = await apiRequest(endpoint, {
-        method: mode === 'edit' ? 'PUT' : 'POST',
-        data: payload,
-        headers: {
-          Authorization: `Bearer ${token}`
-        }
+    if (mode === "edit") {
+      fields._mode = "update";
+      fetcher.submit(fields, {
+        method: "post",
+        action: `/editar-usuario/${userData?.user_id ?? ""}`,
       });
-
-      console.log(`${mode === 'edit' ? 'Edit' : 'Create'} response:`, response);
-      setToast({ message: `Usuario ${mode === 'edit' ? 'actualizado' : 'creado'} exitosamente`, type: 'success' });
-      if (mode === 'create') {
-        setFormData(initialFormData);
-      }
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      if (redirectTo) {
-        window.location.href = redirectTo;
-      }
-      
-    } catch (error: any) {
-      console.error(`${mode === 'edit' ? 'Update' : 'Create'} error:`, error);
-      if (error.message.includes('errors')) {
-        try {
-          const errorData = JSON.parse(error.message.split(': ')[1]);
-          if (errorData.errors) {
-            const backendErrors: FormErrors = {};
-            errorData.errors.forEach((err: any) => {
-              backendErrors[err.param] = err.msg;
-            });
-            setErrors(backendErrors);
-            setToast({ message: 'Por favor corrige los errores marcados', type: 'error' });
-          }
-        } catch {
-          setToast({ message: 'Error al procesar la respuesta del servidor', type: 'error' });
-        }
-      } else {
-        setToast({ message: 'Error al procesar la solicitud', type: 'error' });
-      }
-    } finally {
-      setIsSubmitting(false);
+    } else {
+      fetcher.submit(fields, { method: "post", action: "/crear-usuario" });
     }
   };
 
   const handleReset = () => {
-    if (mode === 'edit') {
-      if (redirectTo) {
-        window.location.href = redirectTo;
-      }
+    if (mode === "edit") {
+      if (redirectTo) window.location.href = redirectTo;
     } else {
-      setFormData(initialFormData);
+      setFormData(initialFormData());
       setErrors({});
       setToast(null);
     }
@@ -213,19 +217,21 @@ export default function CreateUserForm({ mode, user_data, redirectTo,token }: Cr
 
   const inputClass = (fieldName: string) =>
     `w-full border rounded-[var(--radius-md)] px-3 py-2.5 text-sm bg-[var(--color-surface-white)] text-[var(--color-ink)] focus:outline-none focus:ring-2 focus:ring-primary-200 focus:border-primary-400 transition-colors ${
-      errors[fieldName] ? 'border-accent-400' : 'border-[var(--color-neutral-300)]'
+      errors[fieldName] ? "border-accent-400" : "border-[var(--color-neutral-300)]"
     }`;
 
   return (
     <div className="card-editorial p-8">
-      <div className="flex items-center border-l-4 p-4 mb-8 rounded-[var(--radius-md)]" style={{ borderColor: "var(--color-ink-muted)", backgroundColor: "var(--color-surface-secondary)" }}>
+      <div
+        className="flex items-center border-l-4 p-4 mb-8 rounded-[var(--radius-md)]"
+        style={{ borderColor: "var(--color-ink-muted)", backgroundColor: "var(--color-surface-secondary)" }}
+      >
         <p className="text-sm font-medium" style={{ color: "var(--color-ink-secondary)" }}>
           Los campos obligatorios están marcados con un asterisco (*).
         </p>
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-6">
-        {/* Usuario y Contraseña */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <div>
             <label className="block text-sm font-medium mb-1.5" style={{ color: "var(--color-ink-secondary)" }}>
@@ -236,34 +242,29 @@ export default function CreateUserForm({ mode, user_data, redirectTo,token }: Cr
               name="user_name"
               value={formData.user_name}
               onChange={handleInputChange}
-              className={inputClass('user_name')}
+              className={inputClass("user_name")}
               placeholder="Ej: juan.perez"
             />
-            {errors.user_name && (
-              <p className="text-accent-400 text-xs mt-1">{errors.user_name}</p>
-            )}
+            {errors.user_name && <p className="text-accent-400 text-xs mt-1">{errors.user_name}</p>}
           </div>
-          { mode === 'create' && (
-          <div>
-            <label className="block text-sm font-medium mb-1.5" style={{ color: "var(--color-ink-secondary)" }}>
-              Contraseña <span className="text-accent-400">*</span>
-            </label>
-            <input
-              type="password"
-              name="password"
-              value={formData.password}
-              onChange={handleInputChange}
-              className={inputClass('password')}
-              placeholder="Contraseña segura"
-            />
-            {errors.password && (
-              <p className="text-accent-400 text-xs mt-1">{errors.password}</p>
-            )}
-          </div>
+          {mode === "create" && (
+            <div>
+              <label className="block text-sm font-medium mb-1.5" style={{ color: "var(--color-ink-secondary)" }}>
+                Contraseña <span className="text-accent-400">*</span>
+              </label>
+              <input
+                type="password"
+                name="password"
+                value={formData.password}
+                onChange={handleInputChange}
+                className={inputClass("password")}
+                placeholder="Contraseña segura"
+              />
+              {errors.password && <p className="text-accent-400 text-xs mt-1">{errors.password}</p>}
+            </div>
           )}
         </div>
 
-        {/* Email y Teléfono */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <div>
             <label className="block text-sm font-medium mb-1.5" style={{ color: "var(--color-ink-secondary)" }}>
@@ -274,12 +275,10 @@ export default function CreateUserForm({ mode, user_data, redirectTo,token }: Cr
               name="email"
               value={formData.email}
               onChange={handleInputChange}
-              className={inputClass('email')}
+              className={inputClass("email")}
               placeholder="usuario@empresa.com"
             />
-            {errors.email && (
-              <p className="text-accent-400 text-xs mt-1">{errors.email}</p>
-            )}
+            {errors.email && <p className="text-accent-400 text-xs mt-1">{errors.email}</p>}
           </div>
 
           <div>
@@ -291,16 +290,13 @@ export default function CreateUserForm({ mode, user_data, redirectTo,token }: Cr
               name="phone_number"
               value={formData.phone_number}
               onChange={handleInputChange}
-              className={inputClass('phone_number')}
+              className={inputClass("phone_number")}
               placeholder="555-1234"
             />
-            {errors.phone_number && (
-              <p className="text-accent-400 text-xs mt-1">{errors.phone_number}</p>
-            )}
+            {errors.phone_number && <p className="text-accent-400 text-xs mt-1">{errors.phone_number}</p>}
           </div>
         </div>
 
-        {/* Estación de Trabajo */}
         <div>
           <label className="block text-sm font-medium mb-1.5" style={{ color: "var(--color-ink-secondary)" }}>
             Estación de Trabajo <span className="text-accent-400">*</span>
@@ -310,15 +306,12 @@ export default function CreateUserForm({ mode, user_data, redirectTo,token }: Cr
             name="workstation"
             value={formData.workstation}
             onChange={handleInputChange}
-            className={inputClass('workstation')}
+            className={inputClass("workstation")}
             placeholder="Ej: WS-001"
           />
-          {errors.workstation && (
-            <p className="text-accent-400 text-xs mt-1">{errors.workstation}</p>
-          )}
+          {errors.workstation && <p className="text-accent-400 text-xs mt-1">{errors.workstation}</p>}
         </div>
 
-        {/* Rol y Departamento */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <div>
             <label className="block text-sm font-medium mb-1.5" style={{ color: "var(--color-ink-secondary)" }}>
@@ -328,18 +321,16 @@ export default function CreateUserForm({ mode, user_data, redirectTo,token }: Cr
               name="role_id"
               value={formData.role_id}
               onChange={handleInputChange}
-              className={inputClass('role_id')}
+              className={inputClass("role_id")}
             >
               <option value="">Seleccionar rol</option>
-              {roles.map(role => (
+              {roles.map((role) => (
                 <option key={role.id} value={role.id}>
                   {role.name}
                 </option>
               ))}
             </select>
-            {errors.role_id && (
-              <p className="text-accent-400 text-xs mt-1">{errors.role_id}</p>
-            )}
+            {errors.role_id && <p className="text-accent-400 text-xs mt-1">{errors.role_id}</p>}
           </div>
 
           <div>
@@ -350,53 +341,39 @@ export default function CreateUserForm({ mode, user_data, redirectTo,token }: Cr
               name="department_id"
               value={formData.department_id}
               onChange={handleInputChange}
-              className={inputClass('department_id')}
+              className={inputClass("department_id")}
             >
               <option value="">Seleccionar departamento</option>
-              {departments.map(dept => (
+              {departments.map((dept) => (
                 <option key={dept.id} value={dept.id}>
                   {dept.name}
                 </option>
               ))}
             </select>
-            {errors.department_id && (
-              <p className="text-accent-400 text-xs mt-1">{errors.department_id}</p>
-            )}
+            {errors.department_id && <p className="text-accent-400 text-xs mt-1">{errors.department_id}</p>}
           </div>
         </div>
 
-        {/* Botones */}
         <div className="flex flex-col sm:flex-row justify-end gap-3 pt-4">
-          <Button
-            type="button"
-            onClick={handleReset}
-            variant="border"
-            color="accent"
-            disabled={isSubmitting}
-          >
-            {mode === 'edit' ? 'Cancelar' : 'Limpiar Formulario'}
+          <Button type="button" onClick={handleReset} variant="border" color="accent" disabled={isSubmitting}>
+            {mode === "edit" ? "Cancelar" : "Limpiar Formulario"}
           </Button>
 
-          <Button
-            type="submit"
-            variant="filled"
-            color="primary"
-            disabled={isSubmitting}
-          >
+          <Button type="submit" variant="filled" color="primary" disabled={isSubmitting}>
             {isSubmitting
-              ? (mode === 'edit' ? 'Actualizando...' : 'Creando Usuario...')
-              : (mode === 'edit' ? 'Actualizar Usuario' : 'Crear Usuario')}
+              ? mode === "edit"
+                ? "Actualizando..."
+                : "Creando Usuario..."
+              : mode === "edit"
+              ? "Actualizar Usuario"
+              : "Crear Usuario"}
           </Button>
         </div>
       </form>
 
       {toast && (
         <div className="fixed top-4 right-4 z-50">
-          <Toast
-            message={toast.message}
-            type={toast.type}
-            duration={toast.type === 'success' ? 4000 : 6000}
-          />
+          <Toast message={toast.message} type={toast.type} duration={toast.type === "success" ? 4000 : 6000} />
         </div>
       )}
     </div>

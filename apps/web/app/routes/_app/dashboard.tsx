@@ -69,17 +69,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
     const all = (await runInTenant(session, async () =>
       Applicant.getApplicantRequests(session.user.user_id),
     )) as LegacyApplicantRequest[] | null;
-    const byStatus = (all ?? []).reduce<Record<string, number>>((acc, r) => {
-      acc[r.status] = (acc[r.status] ?? 0) + 1;
-      return acc;
-    }, {});
-    // TODO M7: remover este log cuando el bug del Solicitante esté confirmado.
-    console.log("[M7 dashboard Solicitante]", {
-      userId: session.user.user_id,
-      organizationId: String(session.organizationId),
-      totalReturned: all?.length ?? 0,
-      byStatus,
-    });
     return {
       kind: "applicant" as const,
       userName,

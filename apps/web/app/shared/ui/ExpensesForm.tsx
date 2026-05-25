@@ -1,132 +1,102 @@
-import React, { useState, useRef } from "react";
-import FileDropZone from "@components/FileDropZone";
-import type { FileDropZoneHandle, ReceiptUploadResponse } from "@components/FileDropZone";
-import { isDevTaxPreviewEnabled } from "@components/CfdiDevPreview";
-import UploadSuccessCard from "@components/UploadSuccessCard";
-import Button from "@components/Button.tsx";
-import { submitTravelExpense } from "@components/SubmitTravelWarper";
-import ModalWrapper from "@components/ModalWrapper.tsx";
-import PolicyAlert from "@components/PolicyAlert";
-import PolicyExceptionModal from "@components/PolicyExceptionModal";
-import { apiRequest } from "@utils/apiClient";
-import { extractCfdiTotalFromXml, extractCfdiUuidFromXml } from "@utils/cfdiXml";
-import { showAppAlert } from "@utils/appAlert";
-
-// Mapping concepto (label) → receiptTypeId del seed (M2-006).
-const CONCEPTO_TO_RECEIPT_TYPE_ID: Record<string, number> = {
-  "Hospedaje": 1,
-  "Comida": 2,
-  "Transporte": 3,
-  "Caseta": 4,
-  "Autobús": 5,
-  "Vuelo": 6,
-  "Otro": 7,
-};
-
-interface PolicyPreviewResult {
-  exceeded: boolean;
-  policyId: number | null;
-  capId: number | null;
-  capAmount: number | null;
-  capUnit: string | null;
-  currency: string;
-  excessTotal: number;
-  message: string;
-}
-
-const API_BASE_URL = import.meta.env.PUBLIC_API_BASE_URL;
-
-function formatRegistroError(err: unknown): string {
-  if (err && typeof err === "object" && "detail" in err) {
-    const d = (err as { detail?: unknown }).detail;
-    if (d && typeof d === "object" && "response" in d) {
-      const r = (d as { response?: { error?: string; details?: string; message?: string } }).response;
-      if (r && typeof r === "object") {
-        if (typeof r.error === "string") return r.error;
-        if (typeof r.details === "string") return r.details;
-        if (typeof r.message === "string") return r.message;
-      }
-    }
-    if (d && typeof d === "object" && "status" in d) {
-      return `Error HTTP ${(d as { status: number }).status} al registrar CFDI`;
-    }
-  }
-  return "No se pudo registrar el CFDI (SAT o validación en servidor)";
-}
-
-function formatCreateReceiptError(err: unknown): string {
-  if (err && typeof err === "object" && "detail" in err) {
-    const d = (err as { detail?: { response?: unknown; status?: number } }).detail;
-    const r = d?.response;
-    if (r && typeof r === "object" && r !== null && "error" in r && typeof (r as { error: string }).error === "string") {
-      return (r as { error: string }).error;
-    }
-    if (typeof d?.status === "number") return `Error ${d.status} al crear el comprobante.`;
-  }
-  return "No se pudo crear el comprobante. Revisa la conexión o vuelve a intentar.";
-}
+/**
+ * @module ExpensesForm
+ * @description Formulario de comprobación del solicitante (CFDI nacional o
+ * gasto internacional). Migrado a React Router 7: ya no usa `apiRequest`,
+ * `token`, ni la subida imperativa de `FileDropZone`. Toda la orquestación
+ * (preview de política → crear receipt → subir archivos → registrar CFDI)
+ * ocurre en la action de la route padre (`subir-comprobante.$id` /
+ * `resubir-comprobante.$id`); aquí sólo se arma el `FormData` multipart y se
+ * envía con `useFetcher`. Paridad 1:1 con el flujo legacy.
+ */
+import { useEffect, useRef, useState } from "react";
+import { useFetcher } from "react-router";
+import FileDropZone from "~/shared/ui/FileDropZone";
+import { isDevTaxPreviewEnabled } from "~/shared/ui/CfdiDevPreview";
+import UploadSuccessCard from "~/shared/ui/UploadSuccessCard";
+import Button from "~/shared/ui/Button";
+import ModalWrapper from "~/shared/ui/ModalWrapper";
+import PolicyAlert from "~/shared/ui/PolicyAlert";
+import PolicyExceptionModal from "~/shared/ui/PolicyExceptionModal";
+import { extractCfdiTotalFromXml } from "~/shared/utils/cfdiXml";
+import { showAppAlert } from "~/shared/utils/appAlert";
+import { CONCEPTO_OPTIONS } from "~/shared/ui/SubmitTravelWarper";
+import type {
+  PolicyPreviewResult,
+  SubmitComprobanteActionResult,
+} from "~/routes/_app/subir-comprobante.$id";
 
 interface Props {
   requestId: number;
-  token: string;
+  /** Modo re-subida: la action borra el comprobante anterior antes de subir. */
+  resubmit?: boolean;
+  /** ID del receipt a reemplazar (modo resubmit). */
   receiptToReplace?: string | null;
 }
 
-export default function ExpensesFormClient({ requestId, token, receiptToReplace }: Props) {
+type IntlCurrency = "USD" | "EUR" | "GBP" | "JPY" | "CAD";
+
+export default function ExpensesForm({ requestId, resubmit = false, receiptToReplace }: Props) {
+  const fetcher = useFetcher<SubmitComprobanteActionResult>();
+
   const [concepto, setConcepto] = useState("Transporte");
   const [monto, setMonto] = useState("");
   const [showValidation, setShowValidation] = useState(false);
   const [pdfFile, setPdfFile] = useState<File | null>(null);
   const [xmlFile, setXmlFile] = useState<File | null>(null);
   const [isInternational, setIsInternational] = useState(false);
-  const [intlCurrency, setIntlCurrency] = useState<"USD" | "EUR" | "GBP" | "JPY" | "CAD">("USD");
+  const [intlCurrency, setIntlCurrency] = useState<IntlCurrency>("USD");
   const [fechaComprobante, setFechaComprobante] = useState(() =>
     new Date().toISOString().slice(0, 10),
   );
-  const [submitting, setSubmitting] = useState(false);
-  const [devUploadResult, setDevUploadResult] = useState<ReceiptUploadResponse | null>(null);
-  const [devReceiptId, setDevReceiptId] = useState<number | null>(null);
-  const [devRegistroResponse, setDevRegistroResponse] = useState<unknown | null>(null);
-  const [devRegistroError, setDevRegistroError] = useState<string | null>(null);
   const [uploadSuccess, setUploadSuccess] = useState(false);
   const [completedConcepto, setCompletedConcepto] = useState("");
-  // M2-006 RF-44 — preview de política y modal de excepción
+  const [completedReceiptId, setCompletedReceiptId] = useState<number | null>(null);
+  const [completedInternational, setCompletedInternational] = useState(false);
+
+  // M2-006 RF-44 — preview de política y modal de excepción.
   const [policyPreview, setPolicyPreview] = useState<PolicyPreviewResult | null>(null);
   const [showExceptionModal, setShowExceptionModal] = useState(false);
   const [exceptionAuthorized, setExceptionAuthorized] = useState(false);
+  /** true cuando el usuario confirmó el submit y esperamos el preview para encadenar. */
+  const pendingSubmitRef = useRef(false);
 
-  const dropZoneRef = useRef<FileDropZoneHandle>(null);
   const showDevPanel = isDevTaxPreviewEnabled();
+  const submitting = fetcher.state !== "idle";
 
-  /**
-   * Llama POST /policies/preview para validar el gasto contra la política aplicable.
-   * Si exceeded y aún no se justificó, abre el modal y retorna false (bloquea submit).
-   */
-  async function checkPolicyBeforeSubmit(): Promise<boolean> {
-    if (exceptionAuthorized) return true;
-    const receiptTypeId = CONCEPTO_TO_RECEIPT_TYPE_ID[concepto];
-    if (!receiptTypeId) return true;
-    try {
-      const result = await apiRequest<PolicyPreviewResult>("/policies/preview", {
-        method: "POST",
-        data: {
-          requestId,
-          receiptTypeId,
-          amount: parseFloat(monto),
-          currency: isInternational ? intlCurrency : "MXN",
-        },
-      });
-      setPolicyPreview(result);
-      if (result.exceeded) {
+  // ── Reacción a la respuesta del action ───────────────────────────────────
+  useEffect(() => {
+    if (fetcher.state !== "idle" || !fetcher.data) return;
+    const data = fetcher.data;
+
+    if (data.ok && data.intent === "previewPolicy") {
+      setPolicyPreview(data.preview);
+      if (data.preview.exceeded && !exceptionAuthorized) {
+        pendingSubmitRef.current = false;
         setShowExceptionModal(true);
-        return false;
+        return;
       }
-      return true;
-    } catch (e) {
-      console.warn("policy preview failed (allowing submit):", e);
-      return true; // No bloqueamos por fallo de preview — el backend revalida.
+      // Política OK (o ya justificada): encadena el submit real si estaba pendiente.
+      if (pendingSubmitRef.current) {
+        pendingSubmitRef.current = false;
+        doSubmit();
+      }
+      return;
     }
-  }
+
+    if (data.ok && data.intent === "submit") {
+      setCompletedConcepto(concepto);
+      setCompletedReceiptId(data.receiptId);
+      setCompletedInternational(data.isInternational);
+      setUploadSuccess(true);
+      return;
+    }
+
+    if (!data.ok) {
+      pendingSubmitRef.current = false;
+      showAppAlert(data.error, { variant: "error" });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fetcher.state, fetcher.data]);
 
   const onXmlFileChange = (file: File | null) => {
     setXmlFile(file);
@@ -135,185 +105,79 @@ export default function ExpensesFormClient({ requestId, token, receiptToReplace 
       try {
         const text = await file.text();
         const total = extractCfdiTotalFromXml(text);
-        if (total != null) {
-          setMonto(total.toFixed(2));
-        }
+        if (total != null) setMonto(total.toFixed(2));
       } catch {
         /* XML no legible: el usuario sigue pudiendo escribir el monto a mano */
       }
     })();
   };
 
-  const handleSubmit = async () => {
-    try {
-      setShowValidation(true);
-      setSubmitting(true);
-      setDevUploadResult(null);
-      setDevReceiptId(null);
-      setDevRegistroResponse(null);
-      setDevRegistroError(null);
-
-      const getValidationErrors = (): string[] => {
-        const errors: string[] = [];
-
-        if (!concepto) errors.push("El concepto es obligatorio.");
-        if (!monto) errors.push("El monto gastado es obligatorio.");
-        else if (isNaN(parseFloat(monto))) errors.push("El monto gastado debe ser un número válido.");
-
-        if (!pdfFile) {
-          errors.push(
-              isInternational
-                  ? "Debes adjuntar el comprobante en JPG o PNG."
-                  : "Debes adjuntar el comprobante en PDF."
-          );
-        }
-
-        if (!isInternational && !xmlFile) errors.push("Debes adjuntar el archivo XML.");
-
-        return errors;
-      };
-
-      const errors: string[] = getValidationErrors();
-      if (errors.length > 0) {
-        showAppAlert(errors.join(" "), { variant: "warning" });
-        setSubmitting(false);
-        return;
-      }
-
-      if (isInternational) {
-        const ymd = fechaComprobante?.trim() ?? "";
-        if (!ymd) {
-          showAppAlert("La fecha del comprobante es obligatoria para recibos internacionales.", {
-            variant: "warning",
-          });
-          setSubmitting(false);
-          return;
-        }
-        const emisionIntl = new Date(`${ymd}T12:00:00`);
-        if (Number.isNaN(emisionIntl.getTime())) {
-          showAppAlert("La fecha del comprobante no es válida. Elige una fecha en el calendario.", {
-            variant: "warning",
-          });
-          setSubmitting(false);
-          return;
-        }
-      }
-
-      // M2-006 RF-44 — pre-evaluar contra política antes de subir nada.
-      const policyOk = await checkPolicyBeforeSubmit();
-      if (!policyOk) {
-        setSubmitting(false);
-        return; // El modal solicitará justificación; al aprobar, el usuario reintenta el submit.
-      }
-
-      let cfdiUuid: string | null = null;
-      if (!isInternational && xmlFile) {
-        const xmlText = await xmlFile.text();
-        cfdiUuid = extractCfdiUuidFromXml(xmlText);
-        if (!cfdiUuid) {
-          showAppAlert("No se pudo leer el UUID del XML. Verifica que sea un CFDI con TimbreFiscalDigital válido.", {
-            variant: "error",
-          });
-          setSubmitting(false);
-          return;
-        }
-      }
-
-      let lastReceiptId: number | null = null;
-      try {
-        const res = await submitTravelExpense({
-          requestId,
-          concepto,
-          monto: parseFloat(monto),
-          token,
-          cfdiUuid: cfdiUuid ?? undefined,
-          allowMissingCfdiUuid: isInternational,
-        });
-        lastReceiptId = res.lastReceiptId;
-      } catch (createErr) {
-        showAppAlert(formatCreateReceiptError(createErr), { variant: "error" });
-        setSubmitting(false);
-        return;
-      }
-
-      if (!lastReceiptId) {
-        showAppAlert("No se pudo crear el comprobante.", { variant: "error" });
-        setSubmitting(false);
-        return;
-      }
-
-      // 2. If replacing an old receipt, delete it first
-      if (receiptToReplace) {
-        try {
-          await apiRequest(`/applicant/delete-receipt/${receiptToReplace}`, {
-            method: "DELETE",
-            headers: { Authorization: `Bearer ${token}` },
-          });
-        } catch (delErr) {
-          console.error("Error eliminando comprobante anterior:", delErr);
-        }
-      }
-
-      // 3. Upload files via FileDropZone's imperative handle (real progress bar)
-      const uploadUrl = `${API_BASE_URL}/files/upload-receipt-files/${lastReceiptId}`;
-      const uploadRes = await dropZoneRef.current!.upload(uploadUrl);
-
-      if (isInternational) {
-        const ymd = fechaComprobante.trim();
-        const emisionIntl = new Date(`${ymd}T12:00:00`);
-        try {
-          await apiRequest(`/comprobantes/${lastReceiptId}`, {
-            method: "POST",
-            data: {
-              is_international: true,
-              descripcion: `${concepto} — comprobante internacional`,
-              total: parseFloat(monto),
-              moneda: intlCurrency,
-              fecha_emision: emisionIntl.toISOString(),
-              receipt_type_id: CONCEPTO_TO_RECEIPT_TYPE_ID[concepto],
-            },
-            headers: { Authorization: `Bearer ${token}` },
-          });
-        } catch (regErr) {
-          console.error(regErr);
-          const msg = formatRegistroError(regErr);
-          showAppAlert(msg, { variant: "error" });
-          setSubmitting(false);
-          return;
-        }
-      } else if (uploadRes.registro_sugerido && typeof uploadRes.registro_sugerido === "object") {
-        try {
-          const regRes = await apiRequest(`/comprobantes/${lastReceiptId}`, {
-            method: "POST",
-            data: uploadRes.registro_sugerido,
-            headers: { Authorization: `Bearer ${token}` },
-          });
-          if (showDevPanel) {
-            setDevRegistroResponse(regRes);
-          }
-        } catch (regErr) {
-          console.error(regErr);
-          const msg = formatRegistroError(regErr);
-          setDevRegistroError(msg);
-          showAppAlert(msg, { variant: "error" });
-          if (showDevPanel) {
-            setDevUploadResult(uploadRes);
-            setDevReceiptId(lastReceiptId);
-          }
-          setSubmitting(false);
-          return;
-        }
-      }
-
-      setDevUploadResult(uploadRes);
-      setDevReceiptId(lastReceiptId);
-      setCompletedConcepto(concepto);
-      setUploadSuccess(true);
-      setSubmitting(false);
-    } catch (err) {
-      console.error(err);
-      setSubmitting(false);
+  function getValidationErrors(): string[] {
+    const errors: string[] = [];
+    if (!concepto) errors.push("El concepto es obligatorio.");
+    if (!monto) errors.push("El monto gastado es obligatorio.");
+    else if (isNaN(parseFloat(monto))) errors.push("El monto gastado debe ser un número válido.");
+    if (!pdfFile) {
+      errors.push(
+        isInternational
+          ? "Debes adjuntar el comprobante en JPG o PNG."
+          : "Debes adjuntar el comprobante en PDF.",
+      );
     }
+    if (!isInternational && !xmlFile) errors.push("Debes adjuntar el archivo XML.");
+    return errors;
+  }
+
+  /** Envía el multipart real (crear receipt → subir → registrar) a la action. */
+  function doSubmit() {
+    if (!pdfFile) return;
+    const fd = new FormData();
+    fd.set("intent", "submit");
+    fd.set("concepto", concepto);
+    fd.set("monto", String(parseFloat(monto)));
+    fd.set("isInternational", String(isInternational));
+    fd.set("intlCurrency", intlCurrency);
+    fd.set("fechaComprobante", fechaComprobante);
+    if (resubmit && receiptToReplace) fd.set("receiptToReplace", receiptToReplace);
+    fd.set("pdf", pdfFile);
+    if (!isInternational && xmlFile) fd.set("xml", xmlFile);
+    fetcher.submit(fd, { method: "post", encType: "multipart/form-data" });
+  }
+
+  const handleSubmit = () => {
+    setShowValidation(true);
+
+    const errors = getValidationErrors();
+    if (errors.length > 0) {
+      showAppAlert(errors.join(" "), { variant: "warning" });
+      return;
+    }
+
+    if (isInternational) {
+      const emisionIntl = new Date(`${fechaComprobante.trim()}T12:00:00`);
+      if (!fechaComprobante.trim() || Number.isNaN(emisionIntl.getTime())) {
+        showAppAlert(
+          "La fecha del comprobante no es válida. Elige una fecha en el calendario.",
+          { variant: "warning" },
+        );
+        return;
+      }
+    }
+
+    // Si ya se justificó la excepción, salta el preview y envía directo.
+    if (exceptionAuthorized) {
+      doSubmit();
+      return;
+    }
+
+    // Preview de política primero; el submit real se encadena en el efecto.
+    pendingSubmitRef.current = true;
+    const fd = new FormData();
+    fd.set("intent", "previewPolicy");
+    fd.set("concepto", concepto);
+    fd.set("monto", String(parseFloat(monto)));
+    fd.set("currency", isInternational ? intlCurrency : "MXN");
+    fetcher.submit(fd, { method: "post" });
   };
 
   if (uploadSuccess) {
@@ -321,13 +185,13 @@ export default function ExpensesFormClient({ requestId, token, receiptToReplace 
       <div className="rounded-[var(--radius-md)] border border-[var(--color-neutral-200)] bg-[var(--color-surface-secondary)] p-6">
         <UploadSuccessCard
           requestId={requestId}
-          receiptId={devReceiptId ?? 0}
+          receiptId={completedReceiptId ?? 0}
           concepto={completedConcepto}
-          apiBaseUrl={API_BASE_URL}
-          uploadResult={devUploadResult}
-          registroResponse={devRegistroResponse as Record<string, unknown> | null}
-          registroError={devRegistroError}
-          isInternational={isInternational}
+          apiBaseUrl="/api"
+          uploadResult={null}
+          registroResponse={null}
+          registroError={null}
+          isInternational={completedInternational}
         />
       </div>
     );
@@ -351,13 +215,9 @@ export default function ExpensesFormClient({ requestId, token, receiptToReplace 
             value={concepto}
             onChange={(e) => setConcepto(e.target.value)}
           >
-            <option>Transporte</option>
-            <option>Hospedaje</option>
-            <option>Comida</option>
-            <option>Caseta</option>
-            <option>Autobús</option>
-            <option>Vuelo</option>
-            <option>Otro</option>
+            {CONCEPTO_OPTIONS.map((opt) => (
+              <option key={opt}>{opt}</option>
+            ))}
           </select>
         </div>
         <div>
@@ -408,9 +268,7 @@ export default function ExpensesFormClient({ requestId, token, receiptToReplace 
               id="intlCurrency"
               className="w-full border border-[var(--color-neutral-300)] rounded-[var(--radius-md)] px-3 py-2.5 text-sm bg-[var(--color-surface-white)] text-[var(--color-ink)]"
               value={intlCurrency}
-              onChange={(e) =>
-                setIntlCurrency(e.target.value as typeof intlCurrency)
-              }
+              onChange={(e) => setIntlCurrency(e.target.value as IntlCurrency)}
             >
               <option value="USD">USD</option>
               <option value="EUR">EUR</option>
@@ -437,10 +295,8 @@ export default function ExpensesFormClient({ requestId, token, receiptToReplace 
         </div>
       )}
 
-      {/* ── Drag & drop file zone ── */}
+      {/* ── Drag & drop file zone (modo selección, sin subida directa) ── */}
       <FileDropZone
-        ref={dropZoneRef}
-        token={token}
         isInternational={isInternational}
         onPdfChange={setPdfFile}
         onXmlChange={onXmlFileChange}
@@ -496,6 +352,12 @@ export default function ExpensesFormClient({ requestId, token, receiptToReplace 
             );
           }}
         />
+      )}
+
+      {showDevPanel && (
+        <p className="text-xs text-[var(--color-ink-muted)]">
+          Modo dev: el registro CFDI y la validación SAT corren en el servidor (action RR7).
+        </p>
       )}
     </div>
   );

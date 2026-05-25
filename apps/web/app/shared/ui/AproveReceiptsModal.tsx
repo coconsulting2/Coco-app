@@ -1,33 +1,29 @@
-import React, { useCallback, useState } from "react";
-import { apiRequest } from "@utils/apiClient";
-import ModalWrapper from "@components/ModalWrapper";
-import Toast from "@components/Toast";
-
-function mensajeErrorApi(error: unknown): string {
-  if (!error || typeof error !== "object" || !("detail" in error)) {
-    return "No se pudo aprobar el comprobante.";
-  }
-  const d = (error as { detail?: unknown }).detail;
-  if (!d || typeof d !== "object" || !("response" in d)) {
-    return "No se pudo aprobar el comprobante.";
-  }
-  const r = (d as { response?: { error?: string } }).response;
-  if (r && typeof r.error === "string" && r.error.trim()) return r.error;
-  return "No se pudo aprobar el comprobante.";
-}
+/**
+ * @module AproveReceiptsModal
+ * @description Botón inline + modal de confirmación para aprobar UN
+ * comprobante individual desde CxP. Submitea al action de la route padre
+ * vía `useFetcher` con intent="approve". Espera que la route padre exponga
+ * un action que llame al use-case `validateReceiptDecision` del slice
+ * receipts-cfdi.
+ */
+import { useEffect, useState } from "react";
+import { useFetcher } from "react-router";
+import ModalWrapper from "~/shared/ui/ModalWrapper";
+import Toast from "~/shared/ui/Toast";
 
 interface Props {
   receipt_id: number;
   title: string;
   message: string;
-  redirection?: string; // Backward compatibility and I don't want to trace all usages to delete safely
   modal_type: "success" | "warning";
   variant?: "filled" | "border" | "empty";
   children: React.ReactNode;
   disabled?: boolean;
-  token: string;
+  /** Callback opcional tras éxito (e.g. cerrar overlay, scroll). */
   onSuccess?: () => void;
 }
+
+type FetcherResult = { ok: true } | { ok: false; error: string; code?: string };
 
 export default function AproveReceipStatus({
   receipt_id,
@@ -37,26 +33,27 @@ export default function AproveReceipStatus({
   variant,
   children,
   disabled = false,
-  token,
   onSuccess,
 }: Props) {
+  const fetcher = useFetcher<FetcherResult>();
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
 
-  const handleConfirm = useCallback(async () => {
-    try {
-        const url = `/accounts-payable/validate-receipt/${receipt_id}`;
-      await apiRequest(url, { 
-        method: "PUT", 
-        data: {"approval": 1},
-        headers: { Authorization: `Bearer ${token}` }
-      });
+  useEffect(() => {
+    if (fetcher.state !== "idle" || !fetcher.data) return;
+    if (fetcher.data.ok) {
       setToast({ message: "Aprobado correctamente", type: "success" });
       onSuccess?.();
-    } catch (error) {
-      console.error("Error en la solicitud:", error);
-      setToast({ message: mensajeErrorApi(error), type: "error" });
+    } else {
+      setToast({ message: fetcher.data.error ?? "No se pudo aprobar el comprobante.", type: "error" });
     }
-  }, [receipt_id, token, onSuccess]);
+  }, [fetcher.state, fetcher.data, onSuccess]);
+
+  const handleConfirm = () => {
+    fetcher.submit(
+      { intent: "approve", receiptId: String(receipt_id) },
+      { method: "post" },
+    );
+  };
 
   return (
     <>
@@ -67,11 +64,17 @@ export default function AproveReceipStatus({
         modal_type={modal_type}
         onConfirm={handleConfirm}
         variant={variant}
-        disabled={disabled}
+        disabled={disabled || fetcher.state !== "idle"}
       >
         {children}
       </ModalWrapper>
-      {toast && <Toast message={toast.message} type={toast.type} duration={toast.type === "error" ? 5000 : 3500} />}
+      {toast && (
+        <Toast
+          message={toast.message}
+          type={toast.type}
+          duration={toast.type === "error" ? 5000 : 3500}
+        />
+      )}
     </>
   );
 }

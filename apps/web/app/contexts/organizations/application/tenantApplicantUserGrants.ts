@@ -3,8 +3,6 @@
  * @description Persiste en `User_Permission` los códigos de la capacidad
  * solicitante del tenant. Idempotente (`skipDuplicates`).
  */
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore — shared config legacy (sin tipos)
 import { TENANT_APPLICANT_CAPABILITY_CODES } from "@coco/shared-config/tenantApplicantCapability";
 import {
   findActivePermissionsByCodes,

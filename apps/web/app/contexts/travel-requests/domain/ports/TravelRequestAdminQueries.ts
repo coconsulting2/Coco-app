@@ -57,4 +57,25 @@ export interface TravelRequestAdminQueries {
     statusId: number,
     limit?: number | null,
   ): Promise<TravelRequestSummaryByDept[]>;
+
+  /**
+   * Lista todas las solicitudes cuyo `requestStatusId` esté en `statusIds`.
+   * Usado por las bandejas role-agnostic de Agencia (status 5,9) y CxP
+   * (status 6, 7+8). Devuelve summaries para grids/tablas.
+   */
+  findByStatusIds(
+    statusIds: number[],
+    limit?: number | null,
+  ): Promise<TravelRequestSummaryByDept[]>;
+
+  /**
+   * Lista las solicitudes de UN usuario cuyo `requestStatusId` esté en
+   * `statusIds`. Usado por dashboard del Solicitante en comprobaciones
+   * (status 6=Comprobación gastos, 7=Validación de comprobantes).
+   */
+  findByUserAndStatusIds(
+    userId: number,
+    statusIds: number[],
+    limit?: number | null,
+  ): Promise<TravelRequestSummaryByDept[]>;
 }

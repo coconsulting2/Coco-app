@@ -1,64 +1,45 @@
 /**
  * OrganizationsAdmin — vista de gestión de organizaciones para super-admin Ditta.
  *
- * Cubre:
- *   - Listado con filtros por kind/status.
- *   - Crear org nueva (wizard simple: datos fiscales + admin inicial).
- *   - Activar / Suspender una org existente.
- *   - Switch de impersonate (X-Organization-Id) para ver datos de la org como su admin.
+ * Prop-driven (RR7): la lista llega por prop `organizations` desde el loader.
+ * Filtros vía `<Form method="get">` (loader-driven). Mutaciones (crear /
+ * suspender / activar) vía `useFetcher` contra el `action` de la ruta. Toda la
+ * data interna pasa por loader/action RR7. El impersonate sigue siendo estado
+ * de cliente (localStorage + X-Organization-Id), no una llamada HTTP interna.
  */
 import { useEffect, useState } from "react";
-import { apiRequest } from "@utils/apiClient";
+import { Form, useFetcher } from "react-router";
 import {
-  setImpersonatedOrgId,
   getImpersonatedOrgId,
-} from "@stores/organizationStore";
-import type {
-  Organization,
-  OrganizationListResponse,
-  CreateOrganizationInput,
-} from "@type/organization";
+  setImpersonatedOrgId,
+} from "~/shared/stores/organizationStore";
+import type { Organization } from "~/shared/types/organization";
+import type { OrganizationsActionData } from "~/routes/_app/admin/organizations";
 
 interface Props {
-  token?: string;
+  organizations: Organization[];
+  kind: string;
+  status: string;
+  csrfToken: string;
 }
 
-export default function OrganizationsAdmin(_: Props) {
-  const [orgs, setOrgs] = useState<Organization[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [kindFilter, setKindFilter] = useState<"" | "ROOT" | "CLIENT">("");
-  const [statusFilter, setStatusFilter] = useState<"" | "CONFIGURING" | "ACTIVE" | "SUSPENDED">("");
+export default function OrganizationsAdmin({
+  organizations,
+  kind,
+  status,
+  csrfToken,
+}: Props) {
   const [showWizard, setShowWizard] = useState(false);
-  const [impersonatedId, setImpersonatedId] = useState<string | null>(getImpersonatedOrgId());
+  const [impersonatedId, setImpersonatedId] = useState<string | null>(
+    getImpersonatedOrgId(),
+  );
 
-  const loadOrgs = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const params = new URLSearchParams();
-      if (kindFilter) params.set("kind", kindFilter);
-      if (statusFilter) params.set("status", statusFilter);
-      const res = await apiRequest<OrganizationListResponse>(
-        `/organizations${params.toString() ? `?${params.toString()}` : ""}`
-      );
-      setOrgs(res.data);
-    } catch (e: any) {
-      const status = e?.detail?.status ?? e?.status;
-      if (status === 403) {
-        setError("No tienes permiso para ver la lista de organizaciones. Solo super-admin Ditta puede.");
-      } else {
-        setError(e?.detail?.response?.error || "No se pudieron cargar las organizaciones.");
-      }
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    void loadOrgs();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [kindFilter, statusFilter]);
+  const mutationFetcher = useFetcher<OrganizationsActionData>();
+  const mutating = mutationFetcher.state !== "idle";
+  const mutationError =
+    mutationFetcher.data && mutationFetcher.data.ok === false
+      ? mutationFetcher.data.error
+      : null;
 
   const handleImpersonate = (orgId: string) => {
     if (impersonatedId === orgId) {
@@ -70,35 +51,36 @@ export default function OrganizationsAdmin(_: Props) {
     }
   };
 
-  const handleSuspend = async (orgId: string) => {
-    if (!confirm("¿Suspender esta organización? Sus usuarios no podrán entrar.")) return;
-    try {
-      await apiRequest(`/organizations/${orgId}/suspend`, { method: "POST" });
-      void loadOrgs();
-    } catch (e: any) {
-      alert(e?.detail?.response?.error || "Error al suspender.");
-    }
+  const submitOrgMutation = (
+    intent: "suspend" | "activate",
+    orgId: string,
+  ) => {
+    mutationFetcher.submit(
+      { intent, organizationId: orgId, _csrf: csrfToken },
+      { method: "post" },
+    );
   };
 
-  const handleActivate = async (orgId: string) => {
-    try {
-      await apiRequest(`/organizations/${orgId}/activate`, { method: "POST" });
-      void loadOrgs();
-    } catch (e: any) {
-      alert(e?.detail?.response?.error || "Error al activar.");
-    }
+  const handleSuspend = (orgId: string) => {
+    if (!confirm("¿Suspender esta organización? Sus usuarios no podrán entrar.")) return;
+    submitOrgMutation("suspend", orgId);
+  };
+
+  const handleActivate = (orgId: string) => {
+    submitOrgMutation("activate", orgId);
   };
 
   return (
     <div className="p-6 space-y-6">
       <header className="flex flex-wrap items-center justify-between gap-4">
-        <div className="flex gap-3">
+        <Form method="get" className="flex gap-3 items-end">
           <label className="text-sm">
             <span className="block text-gray-600">Tipo</span>
             <select
+              name="kind"
               className="border rounded px-2 py-1"
-              value={kindFilter}
-              onChange={(e) => setKindFilter(e.target.value as any)}
+              defaultValue={kind}
+              onChange={(e) => e.currentTarget.form?.requestSubmit()}
             >
               <option value="">Todos</option>
               <option value="ROOT">ROOT (Ditta)</option>
@@ -108,9 +90,10 @@ export default function OrganizationsAdmin(_: Props) {
           <label className="text-sm">
             <span className="block text-gray-600">Estado</span>
             <select
+              name="status"
               className="border rounded px-2 py-1"
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value as any)}
+              defaultValue={status}
+              onChange={(e) => e.currentTarget.form?.requestSubmit()}
             >
               <option value="">Todos</option>
               <option value="CONFIGURING">En configuración</option>
@@ -118,7 +101,12 @@ export default function OrganizationsAdmin(_: Props) {
               <option value="SUSPENDED">Suspendida</option>
             </select>
           </label>
-        </div>
+          <noscript>
+            <button type="submit" className="border rounded px-3 py-1 text-sm">
+              Filtrar
+            </button>
+          </noscript>
+        </Form>
         <button
           onClick={() => setShowWizard(true)}
           className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
@@ -144,76 +132,81 @@ export default function OrganizationsAdmin(_: Props) {
         </div>
       )}
 
-      {error && <div className="bg-red-50 border border-red-200 text-red-800 rounded p-3">{error}</div>}
-
-      {loading ? (
-        <div>Cargando…</div>
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="min-w-full border">
-            <thead className="bg-gray-100">
-              <tr>
-                <th className="px-3 py-2 text-left">ID</th>
-                <th className="px-3 py-2 text-left">Nombre</th>
-                <th className="px-3 py-2 text-left">RFC</th>
-                <th className="px-3 py-2 text-left">Tipo</th>
-                <th className="px-3 py-2 text-left">Estado</th>
-                <th className="px-3 py-2 text-left">Acciones</th>
-              </tr>
-            </thead>
-            <tbody>
-              {orgs.map((o) => (
-                <tr key={o.id} className="border-t">
-                  <td className="px-3 py-2 font-mono text-xs">{o.id}</td>
-                  <td className="px-3 py-2">{o.nombre}</td>
-                  <td className="px-3 py-2">{o.rfc ?? "—"}</td>
-                  <td className="px-3 py-2">
-                    <span className={o.kind === "ROOT" ? "text-purple-700 font-semibold" : ""}>{o.kind}</span>
-                  </td>
-                  <td className="px-3 py-2">
-                    <StatusBadge status={o.status} />
-                  </td>
-                  <td className="px-3 py-2 space-x-2 text-sm">
-                    {o.kind !== "ROOT" && (
-                      <button
-                        onClick={() => handleImpersonate(o.id)}
-                        className="text-blue-600 hover:underline"
-                      >
-                        {impersonatedId === o.id ? "Salir" : "Ver como"}
-                      </button>
-                    )}
-                    {o.status !== "ACTIVE" && o.kind !== "ROOT" && (
-                      <button onClick={() => handleActivate(o.id)} className="text-green-600 hover:underline">
-                        Activar
-                      </button>
-                    )}
-                    {o.status === "ACTIVE" && o.kind !== "ROOT" && (
-                      <button onClick={() => handleSuspend(o.id)} className="text-red-600 hover:underline">
-                        Suspender
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              ))}
-              {orgs.length === 0 && (
-                <tr>
-                  <td colSpan={6} className="text-center text-gray-500 py-6">
-                    Sin organizaciones para los filtros actuales.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+      {mutationError && (
+        <div className="bg-red-50 border border-red-200 text-red-800 rounded p-3">
+          {mutationError}
         </div>
       )}
 
+      <div className="overflow-x-auto">
+        <table className="min-w-full border">
+          <thead className="bg-gray-100">
+            <tr>
+              <th className="px-3 py-2 text-left">ID</th>
+              <th className="px-3 py-2 text-left">Nombre</th>
+              <th className="px-3 py-2 text-left">RFC</th>
+              <th className="px-3 py-2 text-left">Tipo</th>
+              <th className="px-3 py-2 text-left">Estado</th>
+              <th className="px-3 py-2 text-left">Acciones</th>
+            </tr>
+          </thead>
+          <tbody>
+            {organizations.map((o) => (
+              <tr key={o.id} className="border-t">
+                <td className="px-3 py-2 font-mono text-xs">{o.id}</td>
+                <td className="px-3 py-2">{o.nombre}</td>
+                <td className="px-3 py-2">{o.rfc ?? "—"}</td>
+                <td className="px-3 py-2">
+                  <span className={o.kind === "ROOT" ? "text-purple-700 font-semibold" : ""}>{o.kind}</span>
+                </td>
+                <td className="px-3 py-2">
+                  <StatusBadge status={o.status} />
+                </td>
+                <td className="px-3 py-2 space-x-2 text-sm">
+                  {o.kind !== "ROOT" && (
+                    <button
+                      onClick={() => handleImpersonate(o.id)}
+                      className="text-blue-600 hover:underline"
+                    >
+                      {impersonatedId === o.id ? "Salir" : "Ver como"}
+                    </button>
+                  )}
+                  {o.status !== "ACTIVE" && o.kind !== "ROOT" && (
+                    <button
+                      onClick={() => handleActivate(o.id)}
+                      disabled={mutating}
+                      className="text-green-600 hover:underline disabled:opacity-50"
+                    >
+                      Activar
+                    </button>
+                  )}
+                  {o.status === "ACTIVE" && o.kind !== "ROOT" && (
+                    <button
+                      onClick={() => handleSuspend(o.id)}
+                      disabled={mutating}
+                      className="text-red-600 hover:underline disabled:opacity-50"
+                    >
+                      Suspender
+                    </button>
+                  )}
+                </td>
+              </tr>
+            ))}
+            {organizations.length === 0 && (
+              <tr>
+                <td colSpan={6} className="text-center text-gray-500 py-6">
+                  Sin organizaciones para los filtros actuales.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
       {showWizard && (
         <CreateOrganizationWizard
+          csrfToken={csrfToken}
           onClose={() => setShowWizard(false)}
-          onCreated={() => {
-            setShowWizard(false);
-            void loadOrgs();
-          }}
         />
       )}
     </div>
@@ -231,43 +224,33 @@ function StatusBadge({ status }: { status: Organization["status"] }) {
 }
 
 function CreateOrganizationWizard({
+  csrfToken,
   onClose,
-  onCreated,
 }: {
+  csrfToken: string;
   onClose: () => void;
-  onCreated: () => void;
 }) {
-  const [form, setForm] = useState<CreateOrganizationInput>({
-    nombre: "",
-    rfc: "",
-    razonSocial: "",
-    timezone: "America/Mexico_City",
-    baseCurrency: "MXN",
-    adminEmail: "",
-    adminNombre: "",
-    adminPassword: "",
-  });
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const fetcher = useFetcher<OrganizationsActionData>();
+  const submitting = fetcher.state !== "idle";
+  const error =
+    fetcher.data && fetcher.data.ok === false ? fetcher.data.error : null;
 
-  const handleSubmit = async () => {
-    setSubmitting(true);
-    setError(null);
-    try {
-      // RFC vacío se manda como null para que el backend lo respete como opcional.
-      const payload = { ...form, rfc: form.rfc?.trim() || null };
-      await apiRequest("/organizations", { method: "POST", data: payload });
-      onCreated();
-    } catch (e: any) {
-      setError(e?.detail?.response?.error || "Error al crear la organización.");
-    } finally {
-      setSubmitting(false);
+  // Cierra el wizard cuando el create termina OK.
+  useEffect(() => {
+    if (fetcher.state === "idle" && fetcher.data?.ok === true && fetcher.data.intent === "create") {
+      onClose();
     }
-  };
+  }, [fetcher.state, fetcher.data, onClose]);
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-lg p-6 w-full max-w-2xl space-y-4">
+      <fetcher.Form
+        method="post"
+        className="bg-white rounded-lg p-6 w-full max-w-2xl space-y-4"
+      >
+        <input type="hidden" name="_csrf" value={csrfToken} />
+        <input type="hidden" name="intent" value="create" />
+
         <h2 className="text-xl font-semibold">Nueva organización</h2>
 
         {error && <div className="bg-red-50 border border-red-200 text-red-800 rounded p-3">{error}</div>}
@@ -275,35 +258,33 @@ function CreateOrganizationWizard({
         <fieldset className="space-y-2">
           <legend className="font-medium">Datos fiscales</legend>
           <input
+            name="nombre"
+            required
             className="w-full border rounded px-2 py-1"
             placeholder="Nombre comercial *"
-            value={form.nombre}
-            onChange={(e) => setForm({ ...form, nombre: e.target.value })}
           />
           <input
+            name="razonSocial"
             className="w-full border rounded px-2 py-1"
             placeholder="Razón social"
-            value={form.razonSocial ?? ""}
-            onChange={(e) => setForm({ ...form, razonSocial: e.target.value })}
           />
           <input
+            name="rfc"
             className="w-full border rounded px-2 py-1"
             placeholder="RFC (opcional)"
-            value={form.rfc ?? ""}
-            onChange={(e) => setForm({ ...form, rfc: e.target.value })}
           />
           <div className="grid grid-cols-2 gap-2">
             <input
+              name="timezone"
               className="border rounded px-2 py-1"
               placeholder="Zona horaria"
-              value={form.timezone}
-              onChange={(e) => setForm({ ...form, timezone: e.target.value })}
+              defaultValue="America/Mexico_City"
             />
             <input
+              name="baseCurrency"
               className="border rounded px-2 py-1"
               placeholder="Moneda base"
-              value={form.baseCurrency}
-              onChange={(e) => setForm({ ...form, baseCurrency: e.target.value })}
+              defaultValue="MXN"
             />
           </div>
         </fieldset>
@@ -311,24 +292,23 @@ function CreateOrganizationWizard({
         <fieldset className="space-y-2">
           <legend className="font-medium">Administrador inicial</legend>
           <input
+            name="adminNombre"
             className="w-full border rounded px-2 py-1"
             placeholder="Nombre completo *"
-            value={form.adminNombre}
-            onChange={(e) => setForm({ ...form, adminNombre: e.target.value })}
           />
           <input
+            name="adminEmail"
+            type="email"
+            required
             className="w-full border rounded px-2 py-1"
             placeholder="Email *"
-            type="email"
-            value={form.adminEmail}
-            onChange={(e) => setForm({ ...form, adminEmail: e.target.value })}
           />
           <input
+            name="adminPassword"
+            type="password"
+            required
             className="w-full border rounded px-2 py-1"
             placeholder="Contraseña inicial *"
-            type="password"
-            value={form.adminPassword}
-            onChange={(e) => setForm({ ...form, adminPassword: e.target.value })}
           />
           <p className="text-xs text-gray-500">
             El admin podrá cambiar su contraseña al primer ingreso.
@@ -336,18 +316,23 @@ function CreateOrganizationWizard({
         </fieldset>
 
         <div className="flex justify-end gap-2">
-          <button onClick={onClose} className="px-4 py-2 rounded border" disabled={submitting}>
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-4 py-2 rounded border"
+            disabled={submitting}
+          >
             Cancelar
           </button>
           <button
-            onClick={handleSubmit}
-            disabled={submitting || !form.nombre || !form.adminEmail || !form.adminPassword}
+            type="submit"
+            disabled={submitting}
             className="px-4 py-2 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:bg-gray-300"
           >
             {submitting ? "Creando…" : "Crear organización"}
           </button>
         </div>
-      </div>
+      </fetcher.Form>
     </div>
   );
 }

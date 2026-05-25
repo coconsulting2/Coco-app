@@ -1,38 +1,25 @@
-// @ts-nocheck — legacy provider; will be removed when dispatchers delegate to @coco/integrations
 /**
- * Ofertas de hotel estáticas — solo con `HOTEL_PROVIDER=mock` (sin Duffel).
+ * @module MockHotelProvider
+ * @description Adapter del puerto `HotelProvider` con ofertas estáticas
+ * (solo con `HOTEL_PROVIDER=mock`, sin Duffel). Paridad con el legacy
+ * `services/mockHotelProvider.js`.
  */
+import type { NormalizedStayOffer } from "@coco/integrations/duffel";
+import type {
+  HotelProvider,
+  HotelProviderLabel,
+  StaySearchInputApp,
+} from "~/contexts/hotels/domain/ports/HotelProvider.js";
 
-/**
- * @typedef {Object} HotelSearchParams
- * @property {string} ciudad - texto libre (ciudad o zona)
- * @property {string} fechaEntrada - YYYY-MM-DD
- * @property {string} fechaSalida - YYYY-MM-DD
- * @property {number} huespedes
- */
+/** Oferta de hospedaje mock: misma forma que la normalizada salvo `provider`. */
+export type MockStayOffer = Omit<NormalizedStayOffer, "provider"> & {
+  provider: "mock" | "mock_fallback";
+};
 
-/**
- * @typedef {Object} NormalizedHotelOffer
- * @property {string} id
- * @property {string} hotelName
- * @property {string} addressHint
- * @property {string} checkIn - YYYY-MM-DD
- * @property {string} checkOut - YYYY-MM-DD
- * @property {number} nights
- * @property {number} totalAmount
- * @property {string} totalCurrency
- * @property {number} stars
- */
+export class MockHotelProvider implements HotelProvider {
+  readonly lastProviderUsed: HotelProviderLabel = "mock";
 
-/**
- *
- */
-export class MockHotelProvider {
-  /**
-   * @param {HotelSearchParams} params
-   * @returns {Promise<NormalizedHotelOffer[]>}
-   */
-  async searchOffers(params) {
+  async searchOffers(params: StaySearchInputApp): Promise<MockStayOffer[]> {
     const city = String(params.ciudad || "CDMX").trim() || "CDMX";
     const checkIn = String(params.fechaEntrada || "2026-06-01");
     const checkOut = String(params.fechaSalida || "2026-06-03");
@@ -50,6 +37,9 @@ export class MockHotelProvider {
     return [
       {
         id: `mock-hotel-001-${city}`,
+        rawOfferId: `mock-hotel-001-${city}`,
+        searchResultId: `mock-hotel-001-${city}`,
+        accommodationId: null,
         hotelName: `Hotel Sandbox ${city}`,
         addressHint: `Zona centro · ${city}`,
         checkIn,
@@ -62,6 +52,9 @@ export class MockHotelProvider {
       },
       {
         id: `mock-hotel-002-${city}`,
+        rawOfferId: `mock-hotel-002-${city}`,
+        searchResultId: `mock-hotel-002-${city}`,
+        accommodationId: null,
         hotelName: "CocoStay Demo",
         addressHint: `Cerca de avenida principal · ${city}`,
         checkIn,
@@ -74,6 +67,9 @@ export class MockHotelProvider {
       },
       {
         id: `mock-hotel-003-${city}`,
+        rawOfferId: `mock-hotel-003-${city}`,
+        searchResultId: `mock-hotel-003-${city}`,
+        accommodationId: null,
         hotelName: "Business Inn Express",
         addressHint: `Distrito financiero · ${city}`,
         checkIn,

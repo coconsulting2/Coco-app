@@ -2,7 +2,7 @@
  * Panel solo desarrollo: mapeo fiscal desde XML (respuesta de upload) y,
  * si hubo POST /comprobantes, contraste con lo persistido / SAT.
  */
-import type { ReceiptUploadResponse } from "@components/FileDropZone";
+import type { ReceiptUploadResponse } from "~/shared/ui/FileDropZone";
 
 export function isDevTaxPreviewEnabled(): boolean {
   if (import.meta.env.DEV) return true;

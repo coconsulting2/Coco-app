@@ -1,25 +1,17 @@
-// @ts-nocheck — bulk-converted legacy; typed properly is M9 follow-up
 /**
  * @module onboardingImportService
  * @description Orquestador de la importación de usuarios para onboarding.
  *
  * Dos fases:
- *   1. preview(buffer, mimetype, originalname, organizationId, actingUserId)
+ *   1. previewImport(buffer, mimetype, originalname, organizationId, actingUserId, options?)
  *      Parsea + valida + cruza con BD → resumen sin persistir.
- *
- *   2. apply(previewToken, organizationId, actingUserId, roleMappings?, permissionExtras?, passwordOptions?)
- *      Persiste usuarios válidos. Las etiquetas de rol externas (otra empresa) se resuelven
- *      con roleMappings desde el front si no hubo equivalencia automática ni en JSON.
- *
- * JSON raíz opcional: { "roleMappings": { "Approver": "Solicitante" }, "users": [...] }
+ *   2. applyImport(previewToken, organizationId, actingUserId, roleMappings?, ...)
+ *      Persiste usuarios válidos.
  *
  * Seguridad:
  *   - El previewToken se genera con crypto.randomBytes y queda atado a (organizationId, actingUserId).
- *   - El cache NUNCA guarda contraseñas en claro (las del archivo, si vinieran, se descartan).
- *     En `apply` deben suministrarse vía passwordGlobal o passwordOverrides[userName].
- *   - Las colisiones de email se evalúan globalmente (email único en todo el sistema).
- *     userName es único por (organization_id, user_name): el mismo login puede repetirse
- *     en otra organización; en preview/apply solo chocan filas contra la org destino.
+ *   - El cache NUNCA guarda contraseñas en claro.
+ *   - Las colisiones de email se evalúan globalmente; userName es único por (organization_id, user_name).
  */
 import crypto from "crypto";
 import bcrypt from "bcrypt";
@@ -43,47 +35,75 @@ import {
   upsertAccountingSociety,
   upsertDepartmentForImport,
 } from "~/contexts/onboarding/infrastructure/onboardingImportQueries.js";
-import { resolveImportStrategy } from "./importStrategyResolver.js";
-import { validateImportRows, isValidImportPassword } from "./onboardingImportValidationService.js";
-import { resolveImportRole, resolveManualRoleMapping } from "./importRoleResolution.js";
-// @ts-ignore — platform permissions legacy (pendiente refactor M9)
+import { resolveImportStrategy } from "~/contexts/onboarding/application/importStrategyResolver.js";
+import {
+  validateImportRows,
+  isValidImportPassword,
+  type ProcessedImportRow,
+} from "~/contexts/onboarding/application/onboardingImportValidationService.js";
+import {
+  resolveImportRole,
+  resolveManualRoleMapping,
+} from "~/contexts/onboarding/application/importRoleResolution.js";
 import { loadEffectivePermissionsForRole } from "~/platform/permissions/permission-service.server.js";
-import { buildPermissionsCatalogGrouped } from "./permissionCatalog.js";
+import { buildPermissionsCatalogGrouped } from "~/contexts/onboarding/application/permissionCatalog.js";
 import {
   getDefaultClientRoleNamesForOnboardingImport,
   getDefaultRolePreviewPermissionCodes,
 } from "@coco/db";
 import { createClientOrganizationOnly } from "~/contexts/organizations/application/organizationService.js";
 import { ensureTenantApplicantUserPermissions } from "~/contexts/organizations/application/tenantApplicantUserGrants.js";
+import type {
+  ApplyImportFailure,
+  ApplyImportResult,
+  CreatedImportUser,
+  CustomImportRoleSpec,
+  ImportSociety,
+  ImportDepartment,
+  ImportUserPreviewRow,
+  OrganizationCreateSpec,
+  PreviewImportResult,
+  RoleCatalogEntry,
+} from "~/contexts/onboarding/domain/entities/ImportUser";
+import type {
+  ApplyImportOptions,
+  PreviewImportOptions,
+} from "~/contexts/onboarding/domain/ports/OnboardingImportService";
 
 const SALT_ROUNDS = 10;
 
-/** Contraseña temporal para admin bootstrap (solo se devuelve una vez en la respuesta de apply). */
-function generateBootstrapAdminPassword() {
+type OrgRole = { roleName: string; roleId: number };
+
+type PreviewCacheEntry = {
+  rows: ProcessedImportRow[];
+  societies: ImportSociety[];
+  departments: ImportDepartment[];
+  organizationId: bigint;
+  actingUserId: bigint;
+  orgRoles: OrgRole[];
+  validRoleNames: string[];
+  expiresAt: number;
+  createNewOrganization: boolean;
+  newOrgSpec?: OrganizationCreateSpec | null;
+};
+
+/** Contraseña temporal para admin bootstrap (solo se devuelve una vez). */
+function generateBootstrapAdminPassword(): string {
   return crypto.randomBytes(16).toString("base64url");
 }
 
-const previewCache = new Map();
+const previewCache = new Map<string, PreviewCacheEntry>();
 const PREVIEW_TTL_MS = 10 * 60 * 1000;
 
-/**
- * Nombre base del rol creado en import (máx. 40 chars en BD). Coincide con el prefijo que muestra el front.
- * @param {string} userName
- * @returns {string}
- */
-function buildImportCustomRoleBaseName(userName) {
+/** Nombre base del rol creado en import (máx. 40 chars en BD). */
+function buildImportCustomRoleBaseName(userName: string): string {
   const u = String(userName ?? "").trim() || "user";
   const prefix = "Imp·";
   const combined = prefix + u;
   return combined.length <= 40 ? combined : combined.slice(0, 40);
 }
 
-/**
- * @param {bigint} organizationId
- * @param {string} desired
- * @returns {Promise<string>}
- */
-async function uniqueRoleNameInOrg(organizationId, desired) {
+async function uniqueRoleNameInOrg(organizationId: bigint, desired: string): Promise<string> {
   const root = String(desired ?? "").trim().slice(0, 40) || "Imp·rol";
   for (let i = 0; i < 200; i++) {
     const suffix = i === 0 ? "" : `·${i}`;
@@ -94,24 +114,22 @@ async function uniqueRoleNameInOrg(organizationId, desired) {
   throw new Error("No se pudo generar un nombre de rol único para la importación.");
 }
 
-/**
- * Crea roles «a medida» antes de validar overrides: cada entrada es userName → { templateRoleName, permissions }.
- *
- * @param {object} opts
- * @param {bigint} opts.organizationId
- * @param {Map<string, number>} opts.roleMap
- * @param {string[]} opts.validRoleNames
- * @param {Array<{ userName: string }>} opts.rows
- * @param {Record<string, { templateRoleName?: string, permissions?: unknown }>} opts.customImportRolesByUser
- * @returns {Promise<Record<string, string>>} userName → roleName creado
- */
-async function createCustomImportRolesInApply(opts) {
+/** Crea roles «a medida» antes de validar overrides. */
+async function createCustomImportRolesInApply(opts: {
+  organizationId: bigint;
+  roleMap: Map<string, number>;
+  validRoleNames: string[];
+  rows: ProcessedImportRow[];
+  customImportRolesByUser: Record<string, CustomImportRoleSpec>;
+}): Promise<Record<string, string>> {
   const { organizationId, roleMap, validRoleNames, rows, customImportRolesByUser } = opts;
   const applyable = new Set(rows.map((r) => String(r.userName ?? "").trim()).filter(Boolean));
-  const out = {};
+  const out: Record<string, string> = {};
 
   const specs =
-    customImportRolesByUser && typeof customImportRolesByUser === "object" && !Array.isArray(customImportRolesByUser)
+    customImportRolesByUser &&
+    typeof customImportRolesByUser === "object" &&
+    !Array.isArray(customImportRolesByUser)
       ? customImportRolesByUser
       : {};
 
@@ -120,7 +138,7 @@ async function createCustomImportRolesInApply(opts) {
     if (!userName || !applyable.has(userName)) {
       throw new Error(`customImportRoles: el usuario «${userName || userNameRaw}» no está en la importación.`);
     }
-    const s = spec && typeof spec === "object" ? spec : {};
+    const s = spec && typeof spec === "object" ? spec : ({} as Partial<CustomImportRoleSpec>);
     const templateRoleName = String(s.templateRoleName ?? "").trim();
     const permissionsRaw = Array.isArray(s.permissions) ? s.permissions : [];
     const permissions = [...new Set(permissionsRaw.map((c) => String(c ?? "").trim()).filter(Boolean))];
@@ -135,7 +153,7 @@ async function createCustomImportRolesInApply(opts) {
     const templateId = roleMap.get(templateRoleName.toLowerCase());
     if (!templateId) {
       throw new Error(
-        `customImportRoles[${userName}]: el rol base «${templateRoleName}» no existe en esta organización.`
+        `customImportRoles[${userName}]: el rol base «${templateRoleName}» no existe en esta organización.`,
       );
     }
 
@@ -149,7 +167,7 @@ async function createCustomImportRolesInApply(opts) {
     const missing = permissions.filter((c) => !foundCodes.has(c));
     if (missing.length > 0) {
       throw new Error(
-        `customImportRoles[${userName}]: permisos no válidos o inactivos en catálogo: ${missing.join(", ")}`
+        `customImportRoles[${userName}]: permisos no válidos o inactivos en catálogo: ${missing.join(", ")}`,
       );
     }
 
@@ -175,15 +193,11 @@ async function createCustomImportRolesInApply(opts) {
 }
 
 /** 32 bytes hex = 64 chars; no predecible. */
-function generatePreviewToken() {
+function generatePreviewToken(): string {
   return `prev_${crypto.randomBytes(32).toString("hex")}`;
 }
 
-/**
- * @param {bigint|number|string} a
- * @param {bigint|number|string} b
- */
-function sameBigInt(a, b) {
+function sameBigInt(a: bigint | number | string, b: bigint | number | string): boolean {
   try {
     return BigInt(a) === BigInt(b);
   } catch {
@@ -191,16 +205,14 @@ function sameBigInt(a, b) {
   }
 }
 
-/**
- * @param {object} row
- * @param {Map<string, bigint>} roleNameToId lower → roleId
- * @param {Map<bigint, string[]>} permByRoleId
- */
-function buildPreviewRow(row, roleNameToId, permByRoleId) {
+function buildPreviewRow(
+  row: ProcessedImportRow,
+  roleNameToId: Map<string, number>,
+  permByRoleId: Map<number, string[]>,
+): ImportUserPreviewRow {
   const canonical = row.mappedRoleName;
   const rid = canonical ? roleNameToId.get(canonical.toLowerCase()) : undefined;
-  const rolePermissionCodes =
-    rid !== undefined && rid !== null ? permByRoleId.get(rid) ?? [] : [];
+  const rolePermissionCodes = rid !== undefined && rid !== null ? permByRoleId.get(rid) ?? [] : [];
 
   return {
     userName: row.userName,
@@ -211,114 +223,91 @@ function buildPreviewRow(row, roleNameToId, permByRoleId) {
     roleName: canonical ?? undefined,
     externalRoleLabel: row.externalRoleLabel ?? undefined,
     needsRoleMapping: Boolean(row.externalRoleLabel && !row.mappedRoleName),
-    /** Permisos efectivos del rol asignado (catálogo del rol + capacidad base de solicitante del tenant). */
     rolePermissionCodes,
-    /** @deprecated usar rolePermissionCodes — se mantiene por compatibilidad. */
     effectivePermissions: rolePermissionCodes,
-    /** UI: avisa al admin que el archivo traía contraseñas (que ya descartamos). */
     hasFilePassword: Boolean(row.hasFilePassword),
   };
 }
 
-/**
- * @param {string} label
- * @param {Record<string, string>} roleMappings
- * @returns {string|null}
- */
-function pickRoleMapping(label, roleMappings) {
+function pickRoleMapping(
+  label: string | null | undefined,
+  roleMappings: Record<string, string>,
+): string | null {
   if (!label) return null;
   const direct = roleMappings[label];
   if (typeof direct === "string" && direct.trim()) return direct.trim();
   const hit = Object.entries(roleMappings).find(
-    ([k]) => k.trim().toLowerCase() === String(label).trim().toLowerCase()
+    ([k]) => k.trim().toLowerCase() === String(label).trim().toLowerCase(),
   );
   return typeof hit?.[1] === "string" ? hit[1].trim() : null;
 }
 
-/**
- * @param {Record<string, unknown>} perUser
- * @param {string} globalTrim
- */
-function validatePasswordApplyOptions(perUser, globalTrim) {
+function validatePasswordApplyOptions(perUser: Record<string, string>, globalTrim: string): void {
   if (globalTrim && !isValidImportPassword(globalTrim)) {
     throw new Error(
-      "La contraseña global no cumple las reglas: mínimo 8 caracteres, una mayúscula, una minúscula y un número."
+      "La contraseña global no cumple las reglas: mínimo 8 caracteres, una mayúscula, una minúscula y un número.",
     );
   }
   for (const [uname, pwd] of Object.entries(perUser)) {
     const t = String(pwd ?? "").trim();
     if (t && !isValidImportPassword(t)) {
       throw new Error(
-        `La contraseña para «${uname}» no cumple las reglas (mínimo 8 caracteres, mayúscula, minúscula y número).`
+        `La contraseña para «${uname}» no cumple las reglas (mínimo 8 caracteres, mayúscula, minúscula y número).`,
       );
     }
   }
 }
 
-/**
- * Determina la contraseña final del usuario en `apply`. Por seguridad, las
- * contraseñas del archivo NO se utilizan: deben llegar por opciones explícitas.
- *
- * @param {string} userName
- * @param {Record<string, string>} perUser
- * @param {string} globalTrim
- * @returns {string|null} contraseña en claro o null si no hay
- */
-function resolvePlainPassword(userName, perUser, globalTrim) {
+function resolvePlainPassword(
+  userName: string,
+  perUser: Record<string, string>,
+  globalTrim: string,
+): string | null {
   const specific = String(perUser[userName] ?? "").trim();
   if (specific) return specific;
   if (globalTrim) return globalTrim;
   return null;
 }
 
-/**
- *
- * @param row
- */
-function buildEmpleadoNombre(row) {
+function buildEmpleadoNombre(row: ProcessedImportRow): string {
   const fn = String(row.firstName ?? "").trim();
   const ln = String(row.lastName ?? "").trim();
   const full = `${fn} ${ln}`.trim();
   return full || String(row.userName ?? "").trim();
 }
 
-/**
- *
- * @param userId
- */
-function fallbackProveedorFromUserId(userId) {
+function fallbackProveedorFromUserId(userId: number): string {
   const base = 20000000000n + BigInt(Number(userId));
   return base.toString().padStart(11, "0").slice(-11);
 }
 
-/**
- * @param {{ nombre: string, rfc?: string|null }} spec
- */
-function validateImportOrganizationSpec(spec) {
+function validateImportOrganizationSpec(spec: OrganizationCreateSpec): void {
   if (spec.rfc && !/^[A-ZÑ&]{3,4}\d{6}[A-Z0-9]{3}$/i.test(spec.rfc)) {
-    throw new Error("El RFC del bloque \"organization\" del JSON no cumple el formato SAT.");
+    throw new Error('El RFC del bloque "organization" del JSON no cumple el formato SAT.');
   }
+}
+
+/** Type guard para el error Prisma P2002 (unique violation). */
+function isPrismaUniqueError(e: unknown): e is { code: string; meta?: { target?: unknown } } {
+  return (
+    typeof e === "object" &&
+    e !== null &&
+    "code" in e &&
+    (e as { code?: unknown }).code === "P2002"
+  );
 }
 
 /**
  * Fase 1: parsea el archivo, valida DTOs, cruza userNames/emails contra la BD.
- *
- * @param {Buffer} buffer
- * @param {string} mimetype
- * @param {string} originalname
- * @param {bigint|number|string} organizationId
- * @param {bigint|number|string} actingUserId
- * @param {{ createNewOrganization?: boolean, actorHasOrganizationCreate?: boolean }} [options]
- * @returns {Promise<object>}
  */
 export async function previewImport(
-  buffer,
-  mimetype,
-  originalname,
-  organizationId,
-  actingUserId,
-  options = {}
-) {
+  buffer: Buffer,
+  mimetype: string,
+  originalname: string,
+  organizationId: bigint | number | string,
+  actingUserId: bigint | number | string,
+  options: PreviewImportOptions = {},
+): Promise<PreviewImportResult> {
   const createNewOrganization = Boolean(options.createNewOrganization);
   const actorHasOrganizationCreate = Boolean(options.actorHasOrganizationCreate);
 
@@ -336,10 +325,8 @@ export async function previewImport(
   const societies = parsed.societies ?? [];
   const departments = parsed.departments ?? [];
 
-  /** @type {{ roleName: string, roleId: number }[]} */
-  let orgRoles;
-  /** @type {string[]} */
-  let validRoleNames;
+  let orgRoles: OrgRole[];
+  let validRoleNames: string[];
 
   if (createNewOrganization) {
     if (strategy.label !== "JSON") {
@@ -350,23 +337,24 @@ export async function previewImport(
     }
     if (!organizationSpec?.nombre?.trim()) {
       throw new Error(
-        "Para crear una organización nueva, el JSON debe incluir un objeto \"organization\" con al menos \"nombre\"."
+        'Para crear una organización nueva, el JSON debe incluir un objeto "organization" con al menos "nombre".',
       );
     }
     validateImportOrganizationSpec(organizationSpec);
-    validRoleNames = getDefaultClientRoleNamesForOnboardingImport();
+    const defaultRoleNames: string[] = getDefaultClientRoleNamesForOnboardingImport();
+    validRoleNames = defaultRoleNames;
     orgRoles = validRoleNames.map((roleName, i) => ({ roleName, roleId: -(i + 1) }));
   } else {
     orgRoles = await listRolesByOrg(orgIdBig);
     validRoleNames = orgRoles.map((r) => r.roleName);
   }
 
-  const processedRows = rows.map((r) => {
+  const processedRows: ProcessedImportRow[] = rows.map((r) => {
     const rawRole = String(r.roleName ?? "").trim();
     const { mappedRoleName, externalRoleLabel } = resolveImportRole(
       rawRole,
       validRoleNames,
-      embeddedRoleMappings
+      embeddedRoleMappings,
     );
     return {
       ...r,
@@ -381,13 +369,10 @@ export async function previewImport(
   const userNamesToCheck = valid.map((r) => r.userName);
   const emailsToCheck = valid.map((r) => r.email);
 
-  /** userName solo choca dentro de la misma org destino (o ninguna si se crea org nueva). */
-  const existingByUsername =
-    createNewOrganization
-      ? []
-      : await findExistingUsersByUsername(userNamesToCheck, orgIdBig);
+  const existingByUsername = createNewOrganization
+    ? []
+    : await findExistingUsersByUsername(userNamesToCheck, orgIdBig);
 
-  // Email sigue siendo único globalmente en el esquema.
   const existingByEmail = await findExistingUsersByEmail(emailsToCheck);
 
   const conflictUserNames = new Set(existingByUsername.map((u) => u.userName));
@@ -405,7 +390,7 @@ export async function previewImport(
   const applyable = valid
     .filter((r) => !conflictUserNameSet.has(r.userName))
     // Importante: NO conservar contraseñas del archivo en memoria.
-    .map(({ password: _ignored, ...rest }) => rest);
+    .map(({ password: _ignored, ...rest }) => rest as ProcessedImportRow);
 
   const previewToken = generatePreviewToken();
   previewCache.set(previewToken, {
@@ -426,22 +411,24 @@ export async function previewImport(
     if (entry.expiresAt < Date.now()) previewCache.delete(token);
   }
 
-  const roleNameToId = new Map(orgRoles.map((r) => [r.roleName.toLowerCase(), r.roleId]));
+  const roleNameToId = new Map<string, number>(
+    orgRoles.map((r) => [r.roleName.toLowerCase(), r.roleId]),
+  );
 
-  const permByRoleId = new Map();
+  const permByRoleId = new Map<number, string[]>();
   await Promise.all(
     orgRoles.map(async (r) => {
       if (r.roleId < 0) {
-        // Org nueva aún sin filas Role en BD: mismos códigos que tras bootstrap + merge solicitante.
-        permByRoleId.set(r.roleId, getDefaultRolePreviewPermissionCodes(r.roleName));
+        const codes: string[] = getDefaultRolePreviewPermissionCodes(r.roleName);
+        permByRoleId.set(r.roleId, codes);
         return;
       }
-      const codes = await loadEffectivePermissionsForRole(r.roleId);
+      const codes: string[] = await loadEffectivePermissionsForRole(r.roleId);
       permByRoleId.set(r.roleId, codes);
-    })
+    }),
   );
 
-  const rolesCatalog = orgRoles.map((r) => ({
+  const rolesCatalog: RoleCatalogEntry[] = orgRoles.map((r) => ({
     roleName: r.roleName,
     effectivePermissions: permByRoleId.get(r.roleId) ?? [],
   }));
@@ -455,12 +442,12 @@ export async function previewImport(
     ...new Set(
       applyable
         .filter((r) => r.externalRoleLabel && !r.mappedRoleName)
-        .map((r) => r.externalRoleLabel)
+        .map((r) => r.externalRoleLabel as string),
     ),
   ];
 
   const needsRoleMappingCount = applyable.filter(
-    (r) => Boolean(r.externalRoleLabel && !r.mappedRoleName)
+    (r) => Boolean(r.externalRoleLabel && !r.mappedRoleName),
   ).length;
 
   const embeddedRoleMappingsFromFile =
@@ -481,7 +468,7 @@ export async function previewImport(
 
   return {
     previewToken,
-    strategy: strategy.label,
+    strategy: strategy.label === "CSV" ? "CSV" : "JSON",
     totalRows: rows.length,
     validRows: applyable.length,
     invalidRows: errors.length,
@@ -489,11 +476,6 @@ export async function previewImport(
     needsRoleMappingCount,
     unmappedExternalRoles,
     embeddedRoleMappingsFromFile,
-    /**
-     * Indica al front que el archivo traía contraseñas. Por seguridad, esas
-     * contraseñas se descartaron y será obligatorio definir global o por usuario
-     * en `apply`.
-     */
     fileHadPasswords: fileHadAnyPassword,
     preview,
     applyableUsernames: applyable.map((r) => r.userName),
@@ -514,28 +496,18 @@ export async function previewImport(
 
 /**
  * Fase 2: persiste usuarios del preview en la BD.
- *
- * @param {string} previewToken
- * @param {bigint|number|string} organizationId
- * @param {bigint|number|string} actingUserId
- * @param {Record<string, string>} [roleMappings] - Etiqueta externa → rol en CocoConsulting (nombre del catálogo)
- * @param {Record<string, string[]>} [permissionExtrasByUser] - userName → códigos de permiso adicionales (directos, no incluidos en el rol)
- * @param {{ globalPassword?: string, perUser?: Record<string, string> }} [passwordOptions] - contraseñas (obligatorias por archivo o global)
- * @param {Record<string, string>} [roleOverridesByUser] - userName → rol elegido en UI; tiene PRIORIDAD sobre mappedRoleName y sobre roleMappings
- * @param {{ createNewOrganization?: boolean }} [applyOptions]
- * @param {Record<string, { templateRoleName: string, permissions: string[] }>} [customImportRolesByUser] - userName → rol nuevo (se crea en BD al aplicar) clonando tope del rol base
  */
 export async function applyImport(
-  previewToken,
-  organizationId,
-  actingUserId,
-  roleMappings = {},
-  permissionExtrasByUser = {},
-  passwordOptions = {},
-  roleOverridesByUser = {},
-  applyOptions = {},
-  customImportRolesByUser = {}
-) {
+  previewToken: string,
+  organizationId: bigint | number | string,
+  actingUserId: bigint | number | string,
+  roleMappings: Record<string, string> = {},
+  permissionExtrasByUser: Record<string, string[]> = {},
+  passwordOptions: { globalPassword?: string; perUser?: Record<string, string> } = {},
+  roleOverridesByUser: Record<string, string> = {},
+  applyOptions: { createNewOrganization?: boolean } = {},
+  customImportRolesByUser: Record<string, CustomImportRoleSpec> = {},
+): Promise<ApplyImportResult> {
   const entry = previewCache.get(previewToken);
   if (!entry) {
     throw new Error("Token de previsualización inválido o expirado. Vuelve a subir el archivo.");
@@ -547,14 +519,18 @@ export async function applyImport(
   if (!sameBigInt(entry.organizationId, organizationId)) {
     throw new Error("El token no corresponde a esta organización.");
   }
-  if (actingUserId === undefined || actingUserId === null || !sameBigInt(entry.actingUserId, actingUserId)) {
+  if (
+    actingUserId === undefined ||
+    actingUserId === null ||
+    !sameBigInt(entry.actingUserId, actingUserId)
+  ) {
     throw new Error("El token fue emitido para otro usuario; vuelve a subir el archivo.");
   }
 
   const applyCreateNew = Boolean(applyOptions?.createNewOrganization);
   if (applyCreateNew !== Boolean(entry.createNewOrganization)) {
     throw new Error(
-      "La opción «crear organización nueva» no coincide con la vista previa. Vuelve a generar la vista previa."
+      "La opción «crear organización nueva» no coincide con la vista previa. Vuelve a generar la vista previa.",
     );
   }
 
@@ -568,17 +544,13 @@ export async function applyImport(
       ? passwordOptions.perUser
       : {};
   const globalPwdTrim =
-    typeof passwordOptions.globalPassword === "string"
-      ? passwordOptions.globalPassword.trim()
-      : "";
+    typeof passwordOptions.globalPassword === "string" ? passwordOptions.globalPassword.trim() : "";
 
   validatePasswordApplyOptions(perUserPwd, globalPwdTrim);
 
   let orgIdBig = BigInt(organizationId);
-  /** @type {Map<string, number>} */
-  let roleMap;
-  /** @type {string[]} */
-  let validRoleNames = entry.validRoleNames;
+  let roleMap: Map<string, number>;
+  let validRoleNames: string[] = entry.validRoleNames;
 
   if (entry.createNewOrganization) {
     if (!entry.newOrgSpec) {
@@ -608,7 +580,7 @@ export async function applyImport(
     customImportRolesByUser,
   });
 
-  const resolvedOverrides = { ...overridesByUser, ...customCreatedRoleNames };
+  const resolvedOverrides: Record<string, string> = { ...overridesByUser, ...customCreatedRoleNames };
 
   // Validamos que todos los overrides apunten a roles existentes en la org.
   for (const [uname, overrideName] of Object.entries(resolvedOverrides)) {
@@ -616,9 +588,7 @@ export async function applyImport(
     if (!candidate) continue;
     const canonical = resolveManualRoleMapping(candidate, validRoleNames);
     if (!canonical) {
-      throw new Error(
-        `El rol "${candidate}" para «${uname}» no existe en esta organización.`
-      );
+      throw new Error(`El rol "${candidate}" para «${uname}» no existe en esta organización.`);
     }
   }
 
@@ -627,7 +597,7 @@ export async function applyImport(
     (r) =>
       r.externalRoleLabel &&
       !r.mappedRoleName &&
-      !String(resolvedOverrides[r.userName] ?? "").trim()
+      !String(resolvedOverrides[r.userName] ?? "").trim(),
   );
   for (const row of needsMappingRows) {
     const picked = pickRoleMapping(row.externalRoleLabel, roleMappings);
@@ -635,13 +605,13 @@ export async function applyImport(
       throw new Error(
         `Falta asignar un rol de esta organización para la etiqueta externa "${row.externalRoleLabel}". ` +
           `Incluye roleMappings en el cuerpo (ej. { "${row.externalRoleLabel}": "Solicitante" }) ` +
-          `o un rol por usuario en roleOverrides.`
+          `o un rol por usuario en roleOverrides.`,
       );
     }
   }
 
-  const createdSocieties = [];
-  const catalogErrors = [];
+  const createdSocieties: Array<{ societyId: bigint }> = [];
+  const catalogErrors: string[] = [];
   if (entry.societies && entry.societies.length > 0) {
     for (const soc of entry.societies) {
       try {
@@ -652,21 +622,21 @@ export async function applyImport(
         });
         createdSocieties.push(dbSoc);
       } catch (e) {
-        catalogErrors.push(
-          `Sociedad "${soc.code}": ${e instanceof Error ? e.message : String(e)}`,
-        );
+        catalogErrors.push(`Sociedad "${soc.code}": ${e instanceof Error ? e.message : String(e)}`);
       }
     }
     if (catalogErrors.length > 0) {
-      throw new Error(
-        `No se pudo importar el catálogo de sociedades: ${catalogErrors.join("; ")}`,
-      );
+      throw new Error(`No se pudo importar el catálogo de sociedades: ${catalogErrors.join("; ")}`);
     }
   }
 
   const defaultSocietyId = createdSocieties.length === 1 ? createdSocieties[0].societyId : undefined;
 
-  const createdDepartments = [];
+  const createdDepartments: Array<{
+    departmentId: number;
+    departmentName: string;
+    costsCenter: string | null;
+  }> = [];
   if (entry.departments && entry.departments.length > 0) {
     for (const dep of entry.departments) {
       try {
@@ -690,14 +660,17 @@ export async function applyImport(
     }
   }
 
-  const departmentByCeco = new Map(createdDepartments.filter(d => d.costsCenter).map(d => [d.costsCenter, d.departmentId]));
-  const departmentByName = new Map(createdDepartments.map(d => [d.departmentName.toLowerCase(), d.departmentId]));
+  const departmentByCeco = new Map<string, number>(
+    createdDepartments.filter((d) => d.costsCenter).map((d) => [d.costsCenter as string, d.departmentId]),
+  );
+  const departmentByName = new Map<string, number>(
+    createdDepartments.map((d) => [d.departmentName.toLowerCase(), d.departmentId]),
+  );
 
-  const created = [];
-  const managerLinks = [];
+  const created: CreatedImportUser[] = [];
+  const managerLinks: Array<{ userId: number; managerNoEmpleado: string }> = [];
   let skipped = 0;
-  /** @type {Array<{ userName: string, reason: string }>} */
-  const failures = [];
+  const failures: ApplyImportFailure[] = [];
 
   for (const row of entry.rows) {
     /**
@@ -706,7 +679,7 @@ export async function applyImport(
      *   2. row.mappedRoleName             — resuelto en el preview (archivo/aliases).
      *   3. roleMappings[externalLabel]    — mapping manual de etiquetas externas.
      */
-    let canonical = null;
+    let canonical: string | null = null;
     const overrideRaw = String(resolvedOverrides[row.userName] ?? "").trim();
     if (overrideRaw) {
       canonical = resolveManualRoleMapping(overrideRaw, validRoleNames);
@@ -717,7 +690,7 @@ export async function applyImport(
       canonical = resolveManualRoleMapping(picked, validRoleNames);
       if (!canonical) {
         throw new Error(
-          `El rol "${picked}" no existe en esta organización (etiqueta externa "${row.externalRoleLabel}").`
+          `El rol "${picked}" no existe en esta organización (etiqueta externa "${row.externalRoleLabel}").`,
         );
       }
     }
@@ -735,7 +708,7 @@ export async function applyImport(
     const plain = resolvePlainPassword(row.userName, perUserPwd, globalPwdTrim);
     if (!plain) {
       throw new Error(
-        `No hay contraseña para «${row.userName}». Define una contraseña global o por usuario.`
+        `No hay contraseña para «${row.userName}». Define una contraseña global o por usuario.`,
       );
     }
     if (!isValidImportPassword(plain)) {
@@ -744,12 +717,13 @@ export async function applyImport(
 
     const passwordHash = await bcrypt.hash(plain, SALT_ROUNDS);
 
-    let departmentId = undefined;
+    let departmentId: number | undefined = undefined;
     if (row.department) {
-       departmentId = departmentByCeco.get(row.department) || departmentByName.get(row.department.toLowerCase());
+      departmentId =
+        departmentByCeco.get(row.department) || departmentByName.get(row.department.toLowerCase());
     }
 
-    let user;
+    let user: CreatedImportUser;
     try {
       user = await createImportedUser({
         organizationId: orgIdBig,
@@ -763,7 +737,7 @@ export async function applyImport(
       });
       await ensureTenantApplicantUserPermissions(orgIdBig, user.userId);
     } catch (e) {
-      if (e?.code === "P2002") {
+      if (isPrismaUniqueError(e)) {
         const target = Array.isArray(e.meta?.target)
           ? e.meta.target.join(",").toLowerCase()
           : String(e.meta?.target ?? "").toLowerCase();
@@ -778,8 +752,7 @@ export async function applyImport(
       throw e;
     }
 
-    // Si el archivo trae no_empleado (layout SAP), sincronizamos catálogo Empleado
-    // y vinculamos el User recién creado.
+    // Si el archivo trae no_empleado (layout SAP), sincronizamos catálogo Empleado.
     if (row.noEmpleado) {
       const noEmpleado = String(row.noEmpleado).slice(0, 10);
       const proveedor = String(row.sapProveedor || fallbackProveedorFromUserId(user.userId)).slice(0, 11);
@@ -832,19 +805,17 @@ export async function applyImport(
 
     const extraCodes = permissionExtrasByUser[row.userName];
     if (Array.isArray(extraCodes) && extraCodes.length > 0) {
-      const roleEffective = await loadEffectivePermissionsForRole(roleId);
+      const roleEffective: string[] = await loadEffectivePermissionsForRole(roleId);
       const roleSet = new Set(roleEffective);
       const toAdd = [...new Set(extraCodes.map(String).map((c) => c.trim()).filter(Boolean))].filter(
-        (c) => !roleSet.has(c)
+        (c) => !roleSet.has(c),
       );
       if (toAdd.length > 0) {
         const permRows = await findActivePermissionsByCodes(toAdd);
         const found = new Set(permRows.map((p) => p.code));
         const missing = toAdd.filter((c) => !found.has(c));
         if (missing.length > 0) {
-          throw new Error(
-            `Permisos no válidos o inactivos para ${row.userName}: ${missing.join(", ")}`
-          );
+          throw new Error(`Permisos no válidos o inactivos para ${row.userName}: ${missing.join(", ")}`);
         }
         await grantUserPermissions(
           permRows.map((p) => ({
@@ -857,12 +828,14 @@ export async function applyImport(
     }
   }
 
-  // Segunda pasada: resolver managerUserId por no_empleado para soportar adjacency list SAP.
+  // Segunda pasada: resolver managerUserId por no_empleado (adjacency list SAP).
   if (managerLinks.length > 0) {
     const managerNoEmpleadoSet = [...new Set(managerLinks.map((m) => m.managerNoEmpleado))];
     const managerUsers = await findManagersByNoEmpleado(orgIdBig, managerNoEmpleadoSet);
     const managerByNoEmpleado = new Map(
-      managerUsers.map((u) => [String(u.noEmpleado), Number(u.userId)])
+      managerUsers
+        .filter((u) => u.noEmpleado != null)
+        .map((u) => [String(u.noEmpleado), Number(u.userId)]),
     );
 
     for (const link of managerLinks) {
@@ -881,9 +854,7 @@ export async function applyImport(
     .filter((l) => l.subUserName && l.mgrUserName);
 
   if (stdManagerLinks.length > 0) {
-    const allNames = [
-      ...new Set(stdManagerLinks.flatMap((l) => [l.subUserName, l.mgrUserName])),
-    ];
+    const allNames = [...new Set(stdManagerLinks.flatMap((l) => [l.subUserName, l.mgrUserName]))];
     const usersInOrg = await findUsersByUsernameInOrg(orgIdBig, allNames);
     const byLower = new Map(usersInOrg.map((u) => [u.userName.toLowerCase(), u.userId]));
     for (const { subUserName, mgrUserName } of stdManagerLinks) {
@@ -894,41 +865,40 @@ export async function applyImport(
     }
   }
 
-  /** @type {{ userName: string, email: string, temporaryPassword: string } | undefined} */
-  let bootstrapAdmin = undefined;
+  let bootstrapAdmin: { userName: string; email: string; temporaryPassword: string } | undefined =
+    undefined;
   if (entry.createNewOrganization && created.length > 0) {
     const adminRole = await findAdminRoleInOrg(orgIdBig);
     if (adminRole) {
       const hasAdmin = await findExistingAdminUser(orgIdBig, adminRole.roleId);
       if (!hasAdmin) {
-         const plain = generateBootstrapAdminPassword();
-         const passwordHash = await bcrypt.hash(plain, SALT_ROUNDS);
-         const orgNameSafe = String(entry.newOrgSpec?.nombre ?? "empresa").replace(/\s+/g, "").toLowerCase();
-         const adminUserName = `admin@${orgNameSafe}.com`;
-         const newAdmin = await createImportedUser({
-           organizationId: orgIdBig,
-           roleId: adminRole.roleId,
-           userName: adminUserName,
-           email: adminUserName,
-           password: passwordHash,
-           workstation: "Sistemas",
-           active: true,
-         });
-         created.push(newAdmin);
-         bootstrapAdmin = {
-           userName: adminUserName,
-           email: adminUserName,
-           temporaryPassword: plain,
-         };
+        const plain = generateBootstrapAdminPassword();
+        const passwordHash = await bcrypt.hash(plain, SALT_ROUNDS);
+        const orgNameSafe = String(entry.newOrgSpec?.nombre ?? "empresa")
+          .replace(/\s+/g, "")
+          .toLowerCase();
+        const adminUserName = `admin@${orgNameSafe}.com`;
+        const newAdmin = await createImportedUser({
+          organizationId: orgIdBig,
+          roleId: adminRole.roleId,
+          userName: adminUserName,
+          email: adminUserName,
+          password: passwordHash,
+          workstation: "Sistemas",
+          active: true,
+        });
+        created.push(newAdmin);
+        bootstrapAdmin = {
+          userName: adminUserName,
+          email: adminUserName,
+          temporaryPassword: plain,
+        };
       }
     }
   }
 
   const createdOrganization = entry.createNewOrganization
-    ? {
-        id: orgIdBig.toString(),
-        nombre: String(entry.newOrgSpec?.nombre ?? ""),
-      }
+    ? { id: orgIdBig.toString(), nombre: String(entry.newOrgSpec?.nombre ?? "") }
     : undefined;
 
   return {

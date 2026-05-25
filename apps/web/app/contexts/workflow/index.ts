@@ -28,6 +28,16 @@ export type {
   RequestCommentPage,
 } from "~/contexts/workflow/domain/entities/RequestComment.js";
 
+export type { WorkflowDepartment } from "~/contexts/workflow/domain/entities/WorkflowReference.js";
+export type {
+  SimExpenseType,
+  SimDestinationKind,
+  SimStepStatus,
+  WorkflowSimulationInput,
+  WorkflowSimulationStep,
+  WorkflowSimulationResult,
+} from "~/contexts/workflow/domain/entities/WorkflowSimulation.js";
+
 export type {
   WorkflowRuleRepository,
   WorkflowRuleInput,
@@ -41,6 +51,8 @@ export type {
   RequestCommentQuery,
   RequestCommentRaw,
 } from "~/contexts/workflow/domain/ports/RequestCommentRepository.js";
+export type { WorkflowReferenceRepository } from "~/contexts/workflow/domain/ports/WorkflowReferenceRepository.js";
+export type { WorkflowSimulatorPort } from "~/contexts/workflow/domain/ports/WorkflowSimulatorPort.js";
 
 export {
   WorkflowError,
@@ -56,15 +68,22 @@ import { PrismaWorkflowRuleRepository } from "~/contexts/workflow/infrastructure
 import { DefaultWorkflowEngine } from "~/contexts/workflow/infrastructure/DefaultWorkflowEngine.js";
 import { PrismaRequestCommentRepository } from "~/contexts/workflow/infrastructure/PrismaRequestCommentRepository.js";
 import { LegacyApproverResolverAdapter } from "~/contexts/workflow/infrastructure/legacyAdapters.js";
+import { PrismaWorkflowReferenceRepository } from "~/contexts/workflow/infrastructure/PrismaWorkflowReferenceRepository.js";
+import { LocalWorkflowSimulator } from "~/contexts/workflow/infrastructure/LocalWorkflowSimulator.js";
 
 import * as buildSnapshotsModule from "~/contexts/workflow/application/buildRequestWorkflowSnapshots.js";
 import * as manageRulesModule from "~/contexts/workflow/application/manageWorkflowRules.js";
 import * as manageCommentsModule from "~/contexts/workflow/application/manageRequestComments.js";
+import * as manageReferencesModule from "~/contexts/workflow/application/manageWorkflowReferences.js";
+import * as simulateModule from "~/contexts/workflow/application/simulateWorkflow.js";
+import type { WorkflowSimulationInput } from "~/contexts/workflow/domain/entities/WorkflowSimulation.js";
 
 const defaultRulesRepo = new PrismaWorkflowRuleRepository();
 const defaultEngine = new DefaultWorkflowEngine();
 const defaultCommentsRepo = new PrismaRequestCommentRepository();
 const defaultApproverResolver = new LegacyApproverResolverAdapter();
+const defaultReferencesRepo = new PrismaWorkflowReferenceRepository();
+const defaultSimulator = new LocalWorkflowSimulator();
 
 // ── Use-cases pre-wired ───────────────────────────────────────────────────
 
@@ -94,6 +113,22 @@ export const updateWorkflowRule = (
     import("~/contexts/workflow/domain/ports/WorkflowRuleRepository.js").WorkflowRuleInput
   >,
 ) => manageRulesModule.updateRule(id, patch, { rules: defaultRulesRepo });
+
+export const toggleWorkflowRule = (id: bigint | number, organizationId: bigint) =>
+  manageRulesModule.toggleRule(id, organizationId, { rules: defaultRulesRepo });
+
+export const listWorkflowRuleDepartments = (organizationId: bigint) =>
+  manageReferencesModule.listDepartments(organizationId, {
+    references: defaultReferencesRepo,
+  });
+
+export const listWorkflowRuleRoles = (organizationId: bigint) =>
+  manageReferencesModule.listRoleNames(organizationId, {
+    references: defaultReferencesRepo,
+  });
+
+export const simulateWorkflow = (input: WorkflowSimulationInput) =>
+  simulateModule.simulateWorkflow(input, { simulator: defaultSimulator });
 
 export const createRequestComment = (
   userId: number,
@@ -134,6 +169,10 @@ export const usecases = {
   getRule: manageRulesModule.getRule,
   createRule: manageRulesModule.createRule,
   updateRule: manageRulesModule.updateRule,
+  toggleRule: manageRulesModule.toggleRule,
+  listDepartments: manageReferencesModule.listDepartments,
+  listRoleNames: manageReferencesModule.listRoleNames,
+  simulateWorkflow: simulateModule.simulateWorkflow,
   createComment: manageCommentsModule.createComment,
   readComments: manageCommentsModule.readComments,
 } as const;
@@ -143,4 +182,6 @@ export const adapters = {
   WorkflowEngine: DefaultWorkflowEngine,
   RequestCommentRepository: PrismaRequestCommentRepository,
   ApproverResolverPort: LegacyApproverResolverAdapter,
+  WorkflowReferenceRepository: PrismaWorkflowReferenceRepository,
+  WorkflowSimulatorPort: LocalWorkflowSimulator,
 } as const;

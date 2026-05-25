@@ -1,22 +1,37 @@
-// @ts-nocheck — slice partially typed; pre-existing Prisma mismatches
 /**
  * @module organizationService
- * @description Gestión de organizaciones (tenants). Solo Ditta puede
- * crear/listar todas; cada org cliente solo ve la propia.
+ * @description Use-cases de gestión de organizaciones (tenants). Solo Ditta
+ * (super-admin ROOT) puede crear/listar todas; cada org cliente solo ve la
+ * propia. Refactor LANE-ORG: sin Prisma directo y sin supresores de tipos. La
+ * persistencia y el bootstrap viven detrás de los puertos
+ * `OrganizationRepository` / `OrganizationProvisioning` (DI). El `withRls`
+ * interno preserva la paridad con el legacy Express (cross-org bypass) para
+ * los consumidores que no envuelven RLS ellos mismos (p. ej. onboarding).
  */
 import { withRls } from "~/platform/db/rls.server.js";
-import {
-  bootstrapOrganizationCatalogs,
-  ensureOrganizationAdmin,
-} from "@coco/db";
-import {
-  createOrganizationRow,
-  listOrganizationsPaginated,
-  findOrganizationById,
-  updateOrganizationRow,
-  prismaClient,
-  type OrganizationRow,
-} from "~/contexts/organizations/infrastructure/organizationQueries.js";
+import type {
+  OrganizationRecord,
+  OrganizationRepository,
+} from "~/contexts/organizations/domain/ports/OrganizationRepository.js";
+import type { OrganizationProvisioning } from "~/contexts/organizations/domain/ports/OrganizationProvisioning.js";
+import { PrismaOrganizationRepository } from "~/contexts/organizations/infrastructure/PrismaOrganizationRepository.js";
+import { CocoDbOrganizationProvisioning } from "~/contexts/organizations/infrastructure/CocoDbOrganizationProvisioning.js";
+
+export type OrganizationServiceDeps = {
+  repo: OrganizationRepository;
+  provisioning: OrganizationProvisioning;
+};
+
+let cachedDeps: OrganizationServiceDeps | null = null;
+function defaultDeps(): OrganizationServiceDeps {
+  if (!cachedDeps) {
+    cachedDeps = {
+      repo: new PrismaOrganizationRepository(),
+      provisioning: new CocoDbOrganizationProvisioning(),
+    };
+  }
+  return cachedDeps;
+}
 
 export type SerializedOrganization = {
   id: string;
@@ -41,7 +56,7 @@ export class OrganizationValidationError extends Error {
   }
 }
 
-function serializeOrganization(o: OrganizationRow): SerializedOrganization {
+function serializeOrganization(o: OrganizationRecord): SerializedOrganization {
   return {
     id: typeof o.id === "bigint" ? o.id.toString() : String(o.id),
     nombre: o.nombre,
@@ -72,6 +87,7 @@ export type CreateOrganizationInput = {
 
 export async function createOrganization(
   input: CreateOrganizationInput,
+  deps: OrganizationServiceDeps = defaultDeps(),
 ): Promise<{ organization: SerializedOrganization }> {
   const {
     nombre,
@@ -94,8 +110,8 @@ export async function createOrganization(
   }
 
   return withRls(1n, { bypass: true }, async () => {
-    const org = await createOrganizationRow({
-      nombre,
+    const org = await deps.repo.create({
+      nombre: nombre.trim(),
       rfc: rfc ?? null,
       razonSocial: razonSocial ?? null,
       timezone,
@@ -104,7 +120,7 @@ export async function createOrganization(
       status: "CONFIGURING",
     });
 
-    await bootstrapOrganizationCatalogs(prismaClient, org.id, {
+    await deps.provisioning.bootstrapCatalogs(org.id, {
       includeDittaSuperAdmin: false,
     });
 
@@ -112,7 +128,7 @@ export async function createOrganization(
       .split("@")[0]!
       .replace(/[^a-z0-9_]/gi, "_")
       .slice(0, 60);
-    await ensureOrganizationAdmin(prismaClient, org.id, {
+    await deps.provisioning.ensureAdmin(org.id, {
       userName,
       email: adminEmail,
       password: adminPassword,
@@ -133,6 +149,7 @@ export type CreateClientOrgOnlyInput = {
 
 export async function createClientOrganizationOnly(
   input: CreateClientOrgOnlyInput,
+  deps: OrganizationServiceDeps = defaultDeps(),
 ): Promise<{ organization: SerializedOrganization }> {
   const {
     nombre,
@@ -150,7 +167,7 @@ export async function createClientOrganizationOnly(
   }
 
   return withRls(1n, { bypass: true }, async () => {
-    const org = await createOrganizationRow({
+    const org = await deps.repo.create({
       nombre: nombre.trim(),
       rfc: rfc ?? null,
       razonSocial: razonSocial ?? null,
@@ -159,7 +176,7 @@ export async function createClientOrganizationOnly(
       kind: "CLIENT",
       status: "CONFIGURING",
     });
-    await bootstrapOrganizationCatalogs(prismaClient, org.id, {
+    await deps.provisioning.bootstrapCatalogs(org.id, {
       includeDittaSuperAdmin: false,
     });
     return { organization: serializeOrganization(org) };
@@ -175,6 +192,7 @@ export type ListOrganizationsOpts = {
 
 export async function listOrganizations(
   opts: ListOrganizationsOpts = {},
+  deps: OrganizationServiceDeps = defaultDeps(),
 ): Promise<{
   data: SerializedOrganization[];
   total: number;
@@ -182,12 +200,12 @@ export async function listOrganizations(
   pageSize: number;
 }> {
   const { kind, status, page = 1, pageSize = 25 } = opts;
-  const where: Record<string, unknown> = {};
+  const where: { kind?: string; status?: string } = {};
   if (kind) where.kind = kind;
   if (status) where.status = status;
 
   return withRls(1n, { bypass: true }, async () => {
-    const { rows, total } = await listOrganizationsPaginated(where, { page, pageSize });
+    const { rows, total } = await deps.repo.list(where, { page, pageSize });
     return {
       data: rows.map(serializeOrganization),
       total,
@@ -200,18 +218,20 @@ export async function listOrganizations(
 export async function getOrganization(
   id: bigint | number | string,
   { bypass = false }: { bypass?: boolean } = {},
+  deps: OrganizationServiceDeps = defaultDeps(),
 ): Promise<SerializedOrganization | null> {
   const organizationId = typeof id === "bigint" ? id : BigInt(id);
   return withRls(organizationId, { bypass }, async () => {
-    const org = await findOrganizationById(organizationId);
+    const org = await deps.repo.findById(organizationId);
     return org ? serializeOrganization(org) : null;
   });
 }
 
 export async function getOrganizationMe(
   organizationId: bigint | number | string,
+  deps: OrganizationServiceDeps = defaultDeps(),
 ): Promise<SerializedOrganization | null> {
-  return getOrganization(organizationId, { bypass: false });
+  return getOrganization(organizationId, { bypass: false }, deps);
 }
 
 export type UpdateOrganizationPatch = Partial<{
@@ -236,40 +256,45 @@ export async function updateOrganization(
   id: bigint | number | string,
   patch: UpdateOrganizationPatch,
   { bypass = false }: { bypass?: boolean } = {},
+  deps: OrganizationServiceDeps = defaultDeps(),
 ): Promise<SerializedOrganization> {
   const organizationId = typeof id === "bigint" ? id : BigInt(id);
-  const data: Record<string, unknown> = {};
+  const data: UpdateOrganizationPatch = {};
   for (const k of UPDATE_ALLOWED_KEYS) {
-    if (patch[k] !== undefined) data[k] = patch[k];
+    if (patch[k] !== undefined) {
+      (data as Record<string, unknown>)[k] = patch[k];
+    }
   }
   if (Object.keys(data).length === 0) {
     throw new OrganizationValidationError("Nada que actualizar");
   }
   return withRls(organizationId, { bypass }, async () => {
-    const updated = await updateOrganizationRow(organizationId, data);
+    const updated = await deps.repo.update(organizationId, data);
     return serializeOrganization(updated);
   });
 }
 
 export async function activateOrganization(
   id: bigint | number | string,
+  deps: OrganizationServiceDeps = defaultDeps(),
 ): Promise<SerializedOrganization> {
   const organizationId = typeof id === "bigint" ? id : BigInt(id);
   return withRls(1n, { bypass: true }, async () => {
-    const updated = await updateOrganizationRow(organizationId, { status: "ACTIVE" });
+    const updated = await deps.repo.update(organizationId, { status: "ACTIVE" });
     return serializeOrganization(updated);
   });
 }
 
 export async function suspendOrganization(
   id: bigint | number | string,
+  deps: OrganizationServiceDeps = defaultDeps(),
 ): Promise<SerializedOrganization> {
   const organizationId = typeof id === "bigint" ? id : BigInt(id);
   if (organizationId === 1n) {
     throw new OrganizationValidationError("La organización ROOT no puede ser suspendida");
   }
   return withRls(1n, { bypass: true }, async () => {
-    const updated = await updateOrganizationRow(organizationId, { status: "SUSPENDED" });
+    const updated = await deps.repo.update(organizationId, { status: "SUSPENDED" });
     return serializeOrganization(updated);
   });
 }

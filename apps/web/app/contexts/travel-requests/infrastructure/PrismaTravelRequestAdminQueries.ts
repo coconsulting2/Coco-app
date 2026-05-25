@@ -121,4 +121,71 @@ export class PrismaTravelRequestAdminQueries implements TravelRequestAdminQuerie
       };
     });
   }
+
+  async findByStatusIds(
+    statusIds: number[],
+    limit?: number | null,
+  ): Promise<TravelRequestSummaryByDept[]> {
+    if (!statusIds.length) return [];
+    const requests = await prisma.request.findMany({
+      where: { requestStatusId: { in: statusIds.map(Number) } },
+      include: {
+        user: true,
+        requestStatus: true,
+        routeRequests: {
+          include: { route: { include: { destinationCountry: true } } },
+          orderBy: { route: { routerIndex: "asc" } },
+          take: 1,
+        },
+      },
+      orderBy: { creationDate: "desc" },
+      ...(limit ? { take: Number(limit) } : {}),
+    });
+    return requests.map((r) => {
+      const firstRoute = r.routeRequests[0]?.route;
+      return {
+        requestId: r.requestId,
+        userId: r.userId,
+        destinationCountry: firstRoute?.destinationCountry?.countryName ?? null,
+        beginningDate: firstRoute?.beginningDate ?? null,
+        endingDate: firstRoute?.endingDate ?? null,
+        requestStatus: r.requestStatus.status,
+      };
+    });
+  }
+
+  async findByUserAndStatusIds(
+    userId: number,
+    statusIds: number[],
+    limit?: number | null,
+  ): Promise<TravelRequestSummaryByDept[]> {
+    if (!statusIds.length) return [];
+    const requests = await prisma.request.findMany({
+      where: {
+        userId: Number(userId),
+        requestStatusId: { in: statusIds.map(Number) },
+      },
+      include: {
+        requestStatus: true,
+        routeRequests: {
+          include: { route: { include: { destinationCountry: true } } },
+          orderBy: { route: { routerIndex: "asc" } },
+          take: 1,
+        },
+      },
+      orderBy: { creationDate: "desc" },
+      ...(limit ? { take: Number(limit) } : {}),
+    });
+    return requests.map((r) => {
+      const firstRoute = r.routeRequests[0]?.route;
+      return {
+        requestId: r.requestId,
+        userId: r.userId,
+        destinationCountry: firstRoute?.destinationCountry?.countryName ?? null,
+        beginningDate: firstRoute?.beginningDate ?? null,
+        endingDate: firstRoute?.endingDate ?? null,
+        requestStatus: r.requestStatus.status,
+      };
+    });
+  }
 }

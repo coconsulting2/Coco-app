@@ -1,78 +1,65 @@
-import React, { useCallback, useState } from "react";
-import { apiRequest } from "@utils/apiClient";
-import Modal from "@components/Modal";
-import Toast from "@components/Toast";
-import { getButtonClasses } from "@type/button";
-
-function mensajeErrorApi(error: unknown): string {
-  if (!error || typeof error !== "object" || !("detail" in error)) {
-    return "No se pudo rechazar el comprobante.";
-  }
-  const d = (error as { detail?: unknown }).detail;
-  if (!d || typeof d !== "object" || !("response" in d)) {
-    return "No se pudo rechazar el comprobante.";
-  }
-  const r = (d as { response?: { error?: string } }).response;
-  if (r && typeof r.error === "string" && r.error.trim()) return r.error;
-  return "No se pudo rechazar el comprobante.";
-}
+/**
+ * @module RejectReceiptsModal
+ * @description Botón inline + modal con textarea para rechazar UN
+ * comprobante individual desde CxP. Submitea al action de la route padre
+ * vía `useFetcher` con intent="reject" y comentario obligatorio.
+ */
+import { useEffect, useState } from "react";
+import { useFetcher } from "react-router";
+import Modal from "~/shared/ui/Modal";
+import Toast from "~/shared/ui/Toast";
+import { getButtonClasses } from "~/shared/types/button";
 
 interface Props {
   receipt_id: number;
   request_id: number;
   receipt_type_name?: string;
-  token: string;
   disabled?: boolean;
   children: React.ReactNode;
+  /** Callback opcional tras éxito. */
   onSuccess?: () => void;
 }
+
+type FetcherResult = { ok: true } | { ok: false; error: string; code?: string };
 
 export default function RejectReceipStatus({
   receipt_id,
   request_id,
   receipt_type_name,
-  token,
   disabled = false,
   children,
   onSuccess,
 }: Props) {
+  const fetcher = useFetcher<FetcherResult>();
   const [open, setOpen] = useState(false);
   const [comment, setComment] = useState("");
-  const [submitting, setSubmitting] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
 
-  const handleConfirm = useCallback(async () => {
-    const c = comment.trim();
-    if (!c) {
-      setToast({
-        message: "El comentario es obligatorio para rechazar.",
-        type: "error",
-      });
-      return;
-    }
-    setSubmitting(true);
-    try {
-      await apiRequest(`/accounts-payable/validate-receipt/${receipt_id}`, {
-        method: "PUT",
-        data: { approval: 0, comentario: c },
-        headers: { Authorization: `Bearer ${token}` },
-      });
+  const submitting = fetcher.state !== "idle";
+
+  useEffect(() => {
+    if (fetcher.state !== "idle" || !fetcher.data) return;
+    if (fetcher.data.ok) {
       setOpen(false);
       setComment("");
       setToast({ message: "Comprobante rechazado.", type: "success" });
-      if (onSuccess) {
-        onSuccess();
-      } else {
-        await new Promise((r) => setTimeout(r, 1200));
-        window.location.reload();
-      }
-    } catch (error) {
-      console.error("Error en la solicitud:", error);
-      setToast({ message: mensajeErrorApi(error), type: "error" });
-    } finally {
-      setSubmitting(false);
+      onSuccess?.();
+    } else {
+      setToast({ message: fetcher.data.error ?? "No se pudo rechazar el comprobante.", type: "error" });
     }
-  }, [receipt_id, token, comment, onSuccess]);
+  }, [fetcher.state, fetcher.data, onSuccess]);
+
+  const handleConfirm = () => {
+    const c = comment.trim();
+    if (!c) {
+      setToast({ message: "El comentario es obligatorio para rechazar.", type: "error" });
+      return;
+    }
+    fetcher.submit(
+      { intent: "reject", receiptId: String(receipt_id), comentario: c },
+      { method: "post" },
+    );
+  };
 
   const btnClass = getButtonClasses({
     variant: "filled",

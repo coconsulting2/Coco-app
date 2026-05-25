@@ -7,9 +7,7 @@
 import { jsonOk, jsonError, jsonFromError } from "~/platform/http/responses";
 import { requirePermissions, runInTenant } from "~/platform/session/requireUser.server";
 import { assertCsrf } from "~/platform/csrf/csrf.server";
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore — JS module (policies pendiente sesión H)
-import * as policyExceptionService from "~/contexts/policies/application/policyExceptionService.js";
+import * as policyExceptionService from "~/contexts/policies/application/policyExceptionService";
 
 type DispatchArgs = { request: Request; subpath: string };
 

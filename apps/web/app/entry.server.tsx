@@ -1,4 +1,3 @@
-// @ts-nocheck — legacy route/view props mismatch; M11 UI follow-up
 /**
  * @file app/entry.server.tsx
  * @description Bootstrap del proceso server-side. Ejecuta UNA sola vez al arrancar:
@@ -17,16 +16,16 @@ import { isbot } from "isbot";
 import { renderToPipeableStream } from "react-dom/server";
 
 import { connectMongo } from "~/platform/mongo/gridfs.server.js";
-import { connectPostgres } from "~/platform/db/prisma.server.js";
+import { connectPostgres } from "~/platform/db/prisma.server";
 
 const ABORT_DELAY = 5_000;
 
 // ─── BigInt JSON patch ──────────────────────────────────────────────────────
 // Prisma devuelve BigInt para Organization.id y otros. JSON.stringify lanza
 // TypeError por default; este patch hace que se serialicen como string.
-if (!(BigInt.prototype as any).toJSON) {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (BigInt.prototype as any).toJSON = function () {
+const bigIntProto = BigInt.prototype as { toJSON?: () => string };
+if (!bigIntProto.toJSON) {
+  bigIntProto.toJSON = function (this: bigint): string {
     return this.toString();
   };
 }

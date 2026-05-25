@@ -1,14 +1,19 @@
 /**
  * EmployeeCategoriesAdmin — CRUD de categorías de empleado (M2-006).
+ *
+ * Prop-driven: recibe `categories` del loader de
+ * `routes/_app/admin/employee-categories.tsx`. Las mutaciones se envían vía
+ * `useFetcher` contra la `action` de la ruta (intents create/update/delete).
+ * Sin `apiRequest`/`fetch('/api/...')`/`token`.
  */
 import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
-import Button from "@components/Button";
-import Modal from "@components/Modal";
-import Toast from "@components/Toast";
-import { apiRequest } from "@utils/apiClient";
+import { useFetcher } from "react-router";
+import Button from "~/shared/ui/Button";
+import Modal from "~/shared/ui/Modal";
+import Toast from "~/shared/ui/Toast";
 
 const categorySchema = z.object({
   code: z.string().trim().min(1).max(40),
@@ -17,7 +22,7 @@ const categorySchema = z.object({
 });
 type CategoryFormData = z.infer<typeof categorySchema>;
 
-interface Category {
+export interface CategoryRow {
   categoryId: number;
   code: string;
   name: string;
@@ -25,79 +30,77 @@ interface Category {
   active: boolean;
 }
 
-/**
- * @param {{ token?: string }} _props
- */
-export default function EmployeeCategoriesAdmin(_props: { token?: string }) {
-  const [items, setItems] = useState<Category[]>([]);
-  const [editing, setEditing] = useState<Category | null>(null);
+export interface EmployeeCategoriesAdminProps {
+  categories: CategoryRow[];
+}
+
+type ActionResult = { ok: true; intent: string } | { ok: false; error: string; code?: string };
+
+export default function EmployeeCategoriesAdmin({ categories }: EmployeeCategoriesAdminProps) {
+  const [editing, setEditing] = useState<CategoryRow | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
+
+  const fetcher = useFetcher<ActionResult>();
+  const busy = fetcher.state !== "idle";
 
   const form = useForm<CategoryFormData>({
     resolver: zodResolver(categorySchema),
     defaultValues: { code: "", name: "", description: "" },
   });
 
-  useEffect(() => { void load(); }, []);
-
-  async function load() {
-    try {
-      const r = await apiRequest<{ categories: Category[] }>("/employee-categories");
-      setItems(r.categories || []);
-    } catch {
-      setToast({ message: "Error al cargar categorías", type: "error" });
+  useEffect(() => {
+    if (fetcher.state !== "idle" || !fetcher.data) return;
+    if (fetcher.data.ok) {
+      setModalOpen(false);
+      setToast({ message: "Operación completada.", type: "success" });
+    } else {
+      setToast({ message: fetcher.data.error, type: "error" });
     }
-  }
+  }, [fetcher.state, fetcher.data]);
 
   function openCreate() {
     setEditing(null);
     form.reset({ code: "", name: "", description: "" });
     setModalOpen(true);
   }
-  function openEdit(c: Category) {
+  function openEdit(c: CategoryRow) {
     setEditing(c);
     form.reset({ code: c.code, name: c.name, description: c.description || "" });
     setModalOpen(true);
   }
 
-  async function onSubmit(values: CategoryFormData) {
-    try {
-      if (editing) {
-        await apiRequest(`/employee-categories/${editing.categoryId}`, { method: "PUT", data: values });
-        setToast({ message: "Categoría actualizada.", type: "success" });
-      } else {
-        await apiRequest("/employee-categories", { method: "POST", data: values });
-        setToast({ message: "Categoría creada.", type: "success" });
-      }
-      setModalOpen(false);
-      void load();
-    } catch (e: any) {
-      setToast({ message: e?.detail?.response?.error || "Error al guardar.", type: "error" });
+  function onSubmit(values: CategoryFormData) {
+    const fd = new FormData();
+    fd.set("payload", JSON.stringify(values));
+    if (editing) {
+      fd.set("intent", "update");
+      fd.set("categoryId", String(editing.categoryId));
+    } else {
+      fd.set("intent", "create");
     }
+    fetcher.submit(fd, { method: "post" });
   }
 
-  async function onDelete(c: Category) {
+  function onDelete(c: CategoryRow) {
     if (!confirm(`¿Desactivar la categoría "${c.name}"?`)) return;
-    try {
-      await apiRequest(`/employee-categories/${c.categoryId}`, { method: "DELETE" });
-      void load();
-    } catch (e: any) {
-      setToast({ message: e?.detail?.response?.error || "Error", type: "error" });
-    }
+    const fd = new FormData();
+    fd.set("intent", "delete");
+    fd.set("categoryId", String(c.categoryId));
+    fetcher.submit(fd, { method: "post" });
   }
 
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "1rem" }}>
-        <p style={{ margin: 0 }}>{items.length} categorías</p>
+        <p style={{ margin: 0 }}>{categories.length} categorías</p>
         <Button variant="filled" color="primary" onClick={openCreate}>+ Nueva categoría</Button>
       </div>
 
       <table style={{ width: "100%", borderCollapse: "collapse" }}>
         <thead><tr><th style={th}>Código</th><th style={th}>Nombre</th><th style={th}>Descripción</th><th style={th}>Acciones</th></tr></thead>
         <tbody>
-          {items.map((c) => (
+          {categories.map((c) => (
             <tr key={c.categoryId}>
               <td style={td}>{c.code}</td>
               <td style={td}>{c.name}</td>
@@ -128,7 +131,9 @@ export default function EmployeeCategoriesAdmin(_props: { token?: string }) {
             <label>Descripción<textarea {...form.register("description")} rows={3} maxLength={254} /></label>
             <div style={{ display: "flex", gap: "0.5rem", justifyContent: "flex-end" }}>
               <Button variant="border" color="primary" onClick={() => setModalOpen(false)}>Cancelar</Button>
-              <Button type="submit" variant="filled" color="primary">{editing ? "Guardar" : "Crear"}</Button>
+              <Button type="submit" variant="filled" color="primary" disabled={busy}>
+                {busy ? "Guardando…" : editing ? "Guardar" : "Crear"}
+              </Button>
             </div>
           </form>
         </Modal>

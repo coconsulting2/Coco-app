@@ -2,8 +2,6 @@
  * @module approvalSubstituteService
  * @description Business rules para sustitutos y escalamiento automático.
  */
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore — platform/permissions legacy (pendiente refactor)
 import { loadEffectivePermissions } from "~/platform/permissions/permission-service.server.js";
 import ApprovalSubstituteModel, {
   type Substitute,

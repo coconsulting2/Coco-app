@@ -1,32 +1,61 @@
 /**
  * @file legacy-js.d.ts
- * @description Declaraciones ambient para los `.js` legacy que sobreviven en
- * `apps/web/app/contexts/` y que aún no fueron convertidos a `.ts` con
- * hexagonal proper. Aquí los declaramos como `any` para que el slice's
- * `index.ts` pueda re-exportarlos sin necesidad de `// @ts-ignore`.
+ * @description Ambient declarations for the **platform boundary** `.js` modules
+ * that intentionally stay as JavaScript (Bun runtime quirks, pino transport,
+ * GridFS/Mongo, cron schedulers). These are NOT slice business logic — todos los
+ * slices de `app/contexts/**` ya fueron convertidos a `.ts` hexagonal proper, así
+ * que no quedan entries de contexto aquí.
  *
- * Esta es deuda técnica explícita — cada slice convertido a hexagonal proper
- * (ej. `identity/`) elimina su entry aquí.
- *
- * Próximo en conversión: travel-requests, approvals sub-features,
- * accounts-payable, receipts-cfdi, policies, refunds, notifications,
- * onboarding, organizations, flights, hotels, travel-agency.
- * (workflow, fx, api-keys ya migrados 2026-05-22+)
+ * Cada módulo se declara con su **firma real tipada** (no `any`), de modo que los
+ * consumidores TypeScript obtienen contratos completos sin necesidad de
+ * `@ts-ignore`. Si alguno de estos `.js` se convierte a `.ts` en el futuro,
+ * borra su entry de este archivo.
  */
 
-// ── cross-slice services legacy referenciados por approvals adapters ────
-// (workflow, approvals sub-features ya migrados 2026-05-22+)
-declare module "~/contexts/policies/application/policyExceptionService.js";
-declare module "~/contexts/accounts-payable/application/anticipoPolizaLifecycleService.js";
-declare module "~/contexts/onboarding/application/employeeHierarchyService.js";
+// ── permission service (platform/permissions/permission-service.server.js) ──
+declare module "~/platform/permissions/permission-service.server.js" {
+  /** Códigos de permiso efectivos del usuario (rol + grupos + grants directos). */
+  export function loadEffectivePermissions(userId: number): Promise<string[]>;
+  /** Códigos de permiso que tendría un usuario solo por su rol. */
+  export function loadEffectivePermissionsForRole(roleId: number): Promise<string[]>;
 
-// (receipts-cfdi ya migrado a TS 2026-05-22+; cfdi files con @ts-nocheck local)
+  export function getPermissions(opts?: Record<string, unknown>): Promise<unknown[]>;
+  export function createPermission(input: {
+    code: string;
+    resource: string;
+    action: string;
+    description?: string;
+  }): Promise<unknown>;
+  export function updatePermission(permissionId: number, data: Record<string, unknown>): Promise<unknown>;
+  export function deactivatePermission(permissionId: number): Promise<unknown>;
 
-// ── platform helpers (.js leftover) ───────────────────────────────────────
-// Declarado vacío (TS lo trata con `any` implícito en accesos a propiedades)
-// hasta que el archivo sea convertido a .ts hexagonal.
-declare module "~/platform/permissions/permission-service.server.js";
+  export function getPermissionGroups(): Promise<unknown[]>;
+  export function getPermissionGroup(id: number): Promise<unknown>;
+  export function createPermissionGroup(data: Record<string, unknown>): Promise<unknown>;
+  export function updatePermissionGroup(id: number, data: Record<string, unknown>): Promise<unknown>;
+  export function deactivatePermissionGroup(id: number): Promise<unknown>;
+  export function addPermissionsToGroup(groupId: number, permissionIds: number[]): Promise<unknown>;
+  export function removePermissionFromGroup(groupId: number, permissionId: number): Promise<unknown>;
 
+  export function addPermissionsToRole(roleId: number, permissionIds: number[]): Promise<unknown>;
+  export function removePermissionFromRole(roleId: number, permissionId: number): Promise<unknown>;
+  export function addGroupsToRole(roleId: number, groupIds: number[]): Promise<unknown>;
+  export function removeGroupFromRole(roleId: number, groupId: number): Promise<unknown>;
+
+  export function addPermissionsToUser(userId: number, permissionIds: number[]): Promise<unknown>;
+  export function removePermissionFromUser(userId: number, permissionId: number): Promise<unknown>;
+  export function addGroupsToUser(userId: number, groupIds: number[]): Promise<unknown>;
+  export function removeGroupFromUser(userId: number, groupId: number): Promise<unknown>;
+
+  export function getUserEffectivePermissions(userId: number): Promise<unknown>;
+
+  export function listTenantRolesForAdmin(): Promise<unknown[]>;
+  export function createTenantRole(payload: Record<string, unknown>): Promise<unknown>;
+  export function updateTenantRole(roleId: number, payload: Record<string, unknown>): Promise<unknown>;
+  export function deleteTenantRole(roleId: number): Promise<unknown>;
+}
+
+// ── http errors (platform/http/errors.server.js) ───────────────────────────
 declare module "~/platform/http/errors.server.js" {
   export class MissingTokenError extends Error {}
   export class ExpiredTokenError extends Error {}
@@ -36,15 +65,42 @@ declare module "~/platform/http/errors.server.js" {
   export class InsufficientPermissionsError extends Error {}
 }
 
+// ── GridFS / Mongo (platform/mongo/gridfs.server.js) ───────────────────────
 declare module "~/platform/mongo/gridfs.server.js" {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  export const connectMongo: any;
+  import type { Readable } from "node:stream";
+  import type { Db, GridFSBucket } from "mongodb";
+
+  export function connectMongo(): Promise<Db>;
+  export function disconnectMongo(): Promise<void>;
+  export function resetMongo(): Promise<void>;
+  export function dropMongoDatabase(): Promise<void>;
+  export function uploadFile(
+    fileBuffer: Buffer,
+    fileName: string,
+    fileType: string,
+    metadata?: Record<string, unknown>,
+  ): Promise<{ fileId: string; fileName: string }>;
+  export function getFile(fileId: string): Promise<Readable>;
+  export const db: Db;
+  export const bucket: GridFSBucket;
 }
 
-declare module "~/platform/scheduler/index.js";
-declare module "~/platform/scheduler/approval-substitute-cron.server.js";
+// ── cron schedulers (platform/scheduler/*.js) ──────────────────────────────
+declare module "~/platform/scheduler/index.js" {
+  export function startScheduler(): void;
+  export function stopScheduler(): void;
+}
 
+declare module "~/platform/scheduler/approval-substitute-cron.server.js" {
+  export function runApprovalSubstituteSweep(): Promise<void>;
+  export function startApprovalSubstituteCron(): Promise<void>;
+  export function stopApprovalSubstituteCron(): void;
+}
+
+// ── structured logger (platform/logger/log/logger.js) ──────────────────────
 declare module "~/platform/logger/log/logger.js" {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  export const Logger: (name: string) => any;
+  import type { Logger as PinoLogger } from "pino";
+  export const logger: PinoLogger;
+  export function Logger(service: string): PinoLogger;
+  export function close(): Promise<void>;
 }
