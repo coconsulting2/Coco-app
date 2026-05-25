@@ -1,130 +1,188 @@
 # coco-app
 
-Fusión de `TC3005B.501-Backend` (Express + Prisma + Postgres + MongoDB GridFS + S3) y `TC3005B.501-Frontend` (Astro + React + Tailwind v4) en un único proyecto **React Router v7 framework mode** con **arquitectura hexagonal** y **vertical slicing por bounded context**.
+Sistema de gestión de viajes corporativos de CocoConsulting: solicitudes de
+viaje, flujos de autorización N1/N2, cotización con agencia, comprobación de
+gastos (CFDI/SAT), exportación contable y reembolsos.
 
-## Estado de la migración
+Unifica los antiguos `TC3005B.501-Backend` (Express) y `TC3005B.501-Frontend`
+(Astro) en una sola aplicación **React Router v7 (framework mode, SSR)** sobre
+un **monorepo de bun workspaces**, con **arquitectura hexagonal** por bounded
+context y **multi-tenant con Row-Level Security** en PostgreSQL.
 
-Migración por fases — **cerrada al 2026-05-25**. Ver `CLEANUP_PLAN.md` y
-`ARCHITECTURE.md` para el detalle.
+## Stack
 
-| Fase | Alcance | Estado |
-|---|---|---|
-| 0 | Bootstrap: estructura, configs, copia verbatim de prisma/openapi/certs/cypress/types/utils/components, platform layer (RLS, JWT, sesión, CSRF, permisos) | ✅ |
-| 1 | Slice identity: `/login`, `/dashboard`, `/perfil-usuario`, crear/editar usuario | ✅ |
-| 2 | Slices read-only: fx, flights, hotels, notifications, policies, refunds, organizations, api-keys | ✅ |
-| 3 | Núcleo: travel-requests + approvals + workflow (crear/editar/cancelar solicitud, autorizaciones, comentarios) | ✅ |
-| 4 | Receipts/CFDI + travel-agency + accounts-payable (upload GridFS, SAT SOAP, Duffel, exportación contable) | ✅ |
-| 5 | Admin slices: policies, refunds, onboarding, workflow-rules, organizations write | ✅ |
-| 6 | Hardening: slices 100% hexagonal en TS, `@ts-nocheck`/`@ts-ignore` a 0 fuera de tests, imports alias legacy migrados a `~/shared/...` | ✅ |
+- **Runtime / gestor de paquetes:** Bun (workspaces). No usar npm/pnpm.
+- **App web:** React 19 + React Router v7 SSR + Tailwind CSS v4 (TypeScript estricto).
+- **Base de datos:** PostgreSQL + Prisma, con RLS multi-tenant.
+- **Almacenamiento de archivos:** MongoDB GridFS o S3/R2 (seleccionable por `FILE_STORE_DRIVER`).
+- **Integraciones:** Duffel (vuelos/hoteles), SAT (validación CFDI por SOAP), Wise (pagos), Banxico (FX).
+- **Tests:** Vitest (unit/integración) + Cypress (E2E).
 
-Todos los slices `app/contexts/**` son 100% hexagonal en TypeScript (0 `.js`).
-Los únicos `.js` restantes son platform boundaries en `app/platform/**`
-(declarados tipados en `app/types/legacy-js.d.ts`). Routes y `shared/ui` no
-hacen `apiRequest`/`fetch('/api/...')` salvo un residual conocido
-(`ExpensesDashboard.tsx`).
-
-## Arquitectura
+## Layout del monorepo
 
 ```
 coco-app/
-├── prisma/                      # schema, migrations, seeds (copiados verbatim del legacy)
-├── certs/                       # HTTPS self-signed + Wise mTLS
-├── openapi/                     # 38 YAML preservados como contrato
-├── public/                      # logos, fonts, sw.js
-├── cypress/                     # 15 specs E2E (baseUrl: localhost:5173)
-└── app/
-    ├── root.tsx                 # HTML shell + ErrorBoundary
-    ├── entry.server.tsx         # bootstrap: connectMongo, connectPostgres, scheduler
-    ├── entry.client.tsx
-    ├── routes.ts                # config-based routing
-    ├── platform/                # ÚNICO pedazo horizontal
-    │   ├── db/                  # Prisma client + RLS + tenant-extension + tenant-context
-    │   ├── session/             # JWT, cookies, requireUser, runInTenant
-    │   ├── permissions/         # RBAC granular cached
-    │   ├── csrf/                # double-submit cookie
-    │   ├── crypto/              # AES-256-CBC PII decrypt
-    │   ├── mongo/, s3/, mail/, push/, scheduler/, http/, validation/, api-key/, logger/
-    ├── shared/                  # kernel léxico
-    │   ├── ui/                  # 107 componentes React copiados verbatim
-    │   ├── layouts/             # MainLayout, Sidebar, PageHeader (reescritos como React)
-    │   ├── types/, utils/, config/, styles/, data/, stores/, assets/
-    ├── contexts/                # 16 slices verticales
-    │   ├── identity/
-    │   │   ├── domain/          # entities + ports + value-objects
-    │   │   ├── application/     # userService, adminService (use-cases)
-    │   │   ├── infrastructure/  # userModel, adminModel, permissionModel (Prisma repos)
-    │   │   └── interface/       # api/userApi.server.ts dispatcher
-    │   ├── travel-requests/, approvals/, travel-agency/, receipts-cfdi/,
-    │   │   accounts-payable/, policies/, refunds/, notifications/,
-    │   │   fx/, flights/, hotels/, organizations/, api-keys/, workflow/, onboarding/
-    └── routes/
-        ├── _public/             # /, /login, /404
-        ├── _app/                # rutas autenticadas (auth gating en _layout)
-        └── api/                 # resource routes solo cuando hay razón externa
+├── apps/
+│   └── web/                    @coco/web — aplicación React Router v7 SSR
+│       ├── app/
+│       │   ├── platform/       capa horizontal: db/RLS, sesión/JWT, CSRF, permisos, mongo, s3, mail, push, scheduler
+│       │   ├── contexts/       16 bounded contexts hexagonales (domain / application / infrastructure / interface)
+│       │   ├── shared/         UI con dominio, layouts, hooks, utils, types
+│       │   └── routes/         rutas RR7 (_public, _app, api)
+│       ├── openapi/            contratos OpenAPI
+│       ├── cypress/            specs E2E
+│       └── tests/              specs Vitest
+└── packages/
+    ├── db/                     @coco/db — Prisma, cliente, RLS, tenant context, migraciones y seeds
+    ├── contracts/              @coco/contracts — tipos TypeScript generados desde OpenAPI
+    ├── integrations/           @coco/integrations — Duffel, SAT
+    ├── scheduler/              @coco/scheduler — workers cron (proceso separado)
+    └── ui-kit/                 @coco/ui-kit — átomos de UI sin dominio
 ```
 
-## Filosofía DI > HTTP doble-hop
+Detalle de arquitectura, reglas de capas y patrón de slice: ver `ARCHITECTURE.md`
+y `CONTRIBUTING.md`.
 
-Los `loaders` y `actions` de cada ruta llaman a los use-cases del slice **directamente** vía imports (DI). NO se hace `fetch` interno a `/api/*`. Esto elimina:
-- Serialización JSON innecesaria.
-- Doble validación.
-- Roundtrip HTTP cuando origen y destino están en el mismo proceso.
+## Prerrequisitos
 
-Los endpoints `/api/*` se conservan SOLO cuando hay razón externa:
-- `/api/user/{login,logout,csrf-token}` — la LoginForm legacy los consume.
-- `/api/external/*` — integraciones de terceros con API key.
-- `/api/files/*` — uploads multipart.
-- `/api/comprobantes/*` — CFDI documentado en OpenAPI.
+- **Bun** >= 1.1.0
+- **Docker** + Docker Compose (recomendado para el stack de desarrollo)
+- Alternativa sin Docker: **PostgreSQL** y **MongoDB** locales
 
-## RLS multi-tenant — obligatorio
+## Puesta en marcha
 
-Toda función que toque DB se envuelve en `runInTenant(session, work)` o `runInRls(session, work)`. Ver `CONTRIBUTING.md`.
+### Opción A — Stack de desarrollo con Docker (recomendado)
+
+Levanta PostgreSQL, MongoDB, MinIO (emulación S3), aplica migraciones y arranca
+la app con hot-reload en un solo comando.
+
+```bash
+cp .env.example .env          # completar secrets (ver sección Variables de entorno)
+bun install
+bun run docker:dev            # postgres + mongo + minio + migrate + app (HTTPS :5173)
+```
+
+Servicios y puertos del stack dev:
+
+| Servicio   | Puerto host | Notas |
+|------------|-------------|-------|
+| app        | 5173        | `https://localhost:5173` (certificado self-signed, aceptar en el navegador) |
+| postgres   | 5434        | mapeado a 5432 del contenedor (evita choque con Postgres nativo) |
+| mongo      | 27017       | almacenamiento GridFS |
+| minio API  | 9000        | endpoint S3-compatible |
+| minio web  | 9001        | consola (`minioadmin` / `minioadmin`) |
+| localstack | 4566        | mock S3 alternativo (heredado) |
+
+Comandos relacionados:
+
+```bash
+bun run docker:dev:build      # reconstruye imágenes
+bun run docker:dev:down       # detiene el stack
+bun run docker:dev:clean      # detiene y borra volúmenes (reset total)
+```
+
+### Opción B — Local sin Docker
+
+Requiere PostgreSQL y MongoDB corriendo en el host.
+
+```bash
+cp .env.example .env          # apuntar DATABASE_URL y MONGO_URI a los servicios locales
+bun install
+bun run db:generate           # prisma generate
+bun run db:migrate            # aplica migraciones (prisma migrate dev)
+bun run db:seed:dummy         # carga datos de ejemplo
+bun run dev                   # arranca la app en https://localhost:5173
+```
+
+Tras arrancar, abrir `https://localhost:5173/login` y aceptar el certificado
+self-signed. Las credenciales de prueba provienen del seed (ver `packages/db/prisma`).
+
+## Variables de entorno
+
+Copiar `.env.example` a `.env`. Variables principales (nombres, sin valores):
+
+- **Base de datos y sesión:** `DATABASE_URL`, `MONGO_URI`, `JWT_SECRET`,
+  `SESSION_SECRET`, `AES_SECRET_KEY`, `SESSION_COOKIE_NAME`, `CSRF_COOKIE_NAME`,
+  `SESSION_MAX_AGE_DAYS`.
+- **Almacenamiento de archivos:** `FILE_STORE_DRIVER` (`gridfs` por defecto, o `s3`),
+  y para S3/MinIO/R2: `S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`,
+  `S3_SECRET_ACCESS_KEY`, `S3_FORCE_PATH_STYLE`.
+- **Integraciones:** `DUFFEL_ACCESS_TOKEN`, `FLIGHT_PROVIDER`, `HOTEL_PROVIDER`,
+  `SAT_WSDL_URL`, `SAT_REQUEST_TIMEOUT_MS`, `BANXICO_API_KEY`, `BMX_API_URL`,
+  `WISE_CLIENT_ID`, `WISE_CLIENT_SECRET` (+ rutas de certificados Wise),
+  `MAIL_USER`, `MAIL_PASSWORD`.
+- **Notificaciones push:** `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_MAILTO`.
+- **API externa / cifrado de chat:** `API_KEY_HASH_PEPPER`, `CHAT_MESSAGE_SECRET`,
+  `CHAT_CURSOR_SECRET`.
+- **Bootstrap tenant raíz:** `DITTA_RFC`, `DITTA_ADMIN_INITIAL_PASSWORD`.
+- **Runtime / flags:** `NODE_ENV`, `PORT`, `SCHEDULER_ENABLED`, `MOCK_AUTH`,
+  `JWT_SKIP_IP_CHECK`, `PRISMA_DISABLE_TRIGGERS`.
+- **Cypress (E2E):** `CYPRESS_BASE_URL` y los pares `CYPRESS_<ROL>_USER/PASSWORD`.
+
+`.env` y los certificados de `certs/` están en `.gitignore` y no se versionan.
 
 ## Comandos
 
 ```bash
-bun install                  # install deps
-bun run dev                  # vite dev server HTTPS :5173 (front + back juntos)
-bun run build                # build de producción
-bun run start                # serve build
+# Desarrollo
+bun run dev                   # app en HTTPS :5173 (front + back en el mismo proceso)
+bun run build                 # build de producción
+bun run start                 # sirve el build de producción
+bun run scheduler:dev         # worker de cron (proceso separado)
 
-bun run typecheck            # tsc --noEmit
-bun run lint                 # ESLint (incluye reglas estructurales anti-fuga)
-bun run lint:fix             # auto-fix
+# Calidad
+bun run typecheck             # tsc -b en todo el workspace
+bun run lint                  # ESLint (incluye reglas estructurales de capas)
+bun run lint:fix              # ESLint con auto-fix
+bun run test                  # Vitest (unit + integración)
+bun --filter @coco/web test:e2e        # Cypress headless
+bun --filter @coco/web test:e2e:open   # Cypress interactivo
 
-bun run test                 # vitest unit
-bun run test:e2e             # cypress headless
-bun run test:e2e:open        # cypress interactivo
+# Base de datos (Prisma, vía @coco/db)
+bun run db:generate           # prisma generate
+bun run db:migrate            # prisma migrate dev
+bun run db:studio             # Prisma Studio
+bun run db:seed               # seed base
+bun run db:seed:dummy         # seed con datos de ejemplo
+bun run db:reset              # reset total + seed dummy
+bun run db:seed:orgs          # seed de organizaciones
 
-bun run dummy_db             # reset Prisma DB + seed con datos dummy
-bun run empty_db             # reset Prisma DB + seed mínimo
-bun run migrate              # prisma migrate dev
-bun run generate             # prisma generate
-bun run studio               # prisma studio
-bun run seed                 # seed-orgs.js
+# Contratos
+bun run contracts:generate    # regenera tipos TS desde OpenAPI
+
+# Docker
+bun run docker:dev            # stack de desarrollo
+bun run docker:prod           # stack de producción
 ```
 
-## Setup
+## Arquitectura (resumen)
 
-1. `bun install`
-2. Copia `.env.example` → `.env` y completa secrets (DATABASE_URL, JWT_SECRET, SESSION_SECRET, AES_SECRET_KEY, MONGO_URI, AWS_*, VAPID_*, etc.). Mínimo para dev:
-   - `DATABASE_URL` → Postgres local (puerto 5434 si usas el docker compose del legacy).
-   - `MONGO_URI` → MongoDB local.
-   - `JWT_SECRET` → cualquier secret.
-   - `AES_SECRET_KEY` → 32 chars hex.
-3. `bunx prisma generate`
-4. `bun run dummy_db` (carga seed con datos dummy).
-5. `bun run dev` → abre https://localhost:5173/login (accept cert).
-6. Login con credenciales del seed (ej. `andres.gomez` / `andres123`).
+- **Hexagonal por slice:** cada bounded context en `app/contexts/<slice>/` separa
+  `domain/` (entidades + puertos), `application/` (casos de uso con inyección de
+  dependencias), `infrastructure/` (adaptadores Prisma/integraciones) e
+  `interface/` (dispatchers de API).
+- **Datos por loader/action:** las rutas y los componentes de `shared/ui` no hacen
+  `fetch` a `/api/*` propio ni usan un cliente HTTP interno; los loaders y actions
+  de React Router invocan los casos de uso del slice directamente.
+- **Prisma confinado:** el acceso a base de datos vive solo en `infrastructure/` y
+  en `@coco/db`.
+- **Multi-tenant / RLS obligatorio:** toda operación de base de datos se ejecuta
+  dentro de `runInTenant(session, work)` o `runInRls(session, work)`, que aplican
+  el GUC `app.current_organization_id`. Omitirlo es una fuga de datos entre
+  organizaciones.
 
-## Tests E2E (Cypress)
+Referencia completa en `ARCHITECTURE.md`.
 
-Las 15 specs del frontend legacy se preservaron en `cypress/e2e/`. Asegúrate de que `cypress.config.ts` apunte a `baseUrl: https://localhost:5173`.
+## Testing
 
-```bash
-bun run test:e2e:open
-```
+- **Vitest:** `bun run test`. Specs de casos de uso en `apps/web/tests/contexts/**`
+  (puertos stubbeados en memoria) y de componentes en `apps/web/tests/frontend/**`.
+- **Cypress:** requiere el stack de desarrollo levantado (`bun run docker:dev`) y
+  los usuarios de seed. Specs en `apps/web/cypress/e2e/`.
 
-## Migration log
+## Despliegue
 
-Mira `git log` por commits con prefijo `feat/full/migration-*`.
+Pipeline de CI en `.github/workflows/build.yml` (typecheck, tests, build de imagen
+y push a GHCR `ghcr.io/coconsulting2/coco-app`, más `prisma migrate deploy`).
+Procedimiento completo, lista de secrets y configuración de almacenamiento en
+`DEPLOY.md`.

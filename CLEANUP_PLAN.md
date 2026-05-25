@@ -1,4 +1,41 @@
-# CLEANUP_PLAN — handoff de sesión 2026-05-22 → siguientes
+# CLEANUP_PLAN — handoff de sesión 2026-05-22 → close-out 2026-05-25
+
+## Estado al close-out (LANE-CLEANUP, 2026-05-25)
+
+Wave final. Métricas en `apps/web` (excluye `tests/**`):
+
+| Métrica | Antes (post A-L) | Close-out | Nota |
+|---|---|---|---|
+| `app/` typecheck errors (source) | 0 | **0** | sin contar `.react-router/**` generados ni `packages/db` seedHelpers |
+| `.js` en `app/contexts/` | 0 | **0** | |
+| `.astro` inertes en `app/shared/ui/` | 28 | **0** | borrados (sin runtime, sin dep `astro`) |
+| `@ts-nocheck` (fuera de `tests/**`) | 6 | **0** | |
+| `@ts-ignore` (fuera de `tests/**`) | 17 | **0** | |
+| `legacy-js.d.ts` entries | 11 (3 stale + 8 platform) | **6** | solo platform boundaries `.js`, todas con firma tipada (sin `any`) |
+| `apiRequest(` en `routes/_app` | 0 reales | **0** | (solo menciones en doc-comments) |
+| `apiRequest(` / apiClient en `shared/ui` | — | **0** | `ExpensesDashboard.tsx` (orphan muerto superseded por `comprobar-gastos.tsx`) borrado; import muerto en `comments.utils.ts` removido |
+| imports alias legacy (`@components/*`, etc.) en source | ~133 | **0** | migrados a `~/shared/...`; alias sigue en `tsconfig.json` |
+
+**Qué quedó en `legacy-js.d.ts` (deuda mínima, justificada):** los 6 platform
+boundaries en `app/platform/**` que siguen en `.js` por razones de runtime
+(pino transport + worker_threads en Bun, GridFS/Mongo, cron schedulers,
+`errors.server`, `permission-service.server`). Cada módulo está declarado con
+su **firma real tipada** (no `any`), así los consumidores TS tienen contrato
+completo sin `@ts-ignore`. Convertirlos a `.ts` es trabajo de platform, no de
+cleanup.
+
+**Resuelto post-cleanup:** `app/shared/ui/ExpensesDashboard.tsx` era un orphan
+muerto (sin ruta que lo renderizara, superseded por el dashboard loader-driven
+`comprobar-gastos.tsx`) — borrado. El último `apiRequest`/import de apiClient en
+`shared/ui` queda eliminado. `apiRequest`/apiClient en routes y shared/ui: **0**.
+
+**Residuales documentados (no bloquean; ver detalle abajo):** 4 componentes
+orphan migrados pero sin montar (decisión de producto), intent
+`policy-exception:create` en la ruta host de `ExpensesForm`, 6 platform
+boundaries en `legacy-js.d.ts`, 295 errores de codegen `.react-router` (bug RR7,
+app source = 0), Cypress requiere stack levantado.
+
+---
 
 ## Estado tras Sesiones A-L (2026-05-22+)
 
