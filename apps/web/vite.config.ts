@@ -71,6 +71,14 @@ export default defineConfig({
     host: "0.0.0.0",
     open: "/login",
     hmr: false,
+    // Forzar HTTP/1.1 en dev: con `https` y SIN `proxy`, Vite levanta un
+    // servidor HTTP/2, donde el navegador envía `:authority` en vez del header
+    // `Host`. React Router lee `Host`/`x-forwarded-host` en su protección CSRF
+    // de actions (`throwIfPotentialCSRFAttack`); sin `Host` aborta todo POST con
+    // 400 "Bad Request". Definir `proxy` (aunque vacío) hace que Vite use
+    // node:https (HTTP/1.1) y el navegador envíe `Host`. Solo afecta dev; en
+    // prod sirve `react-router-serve` detrás de un proxy que ya manda Host.
+    proxy: {},
     watch: {
       usePolling: true,
     },
