@@ -42,7 +42,7 @@ import {
   buildComprobanteRegistroBodyFromXml,
   ReceiptsCfdiError,
 } from "~/contexts/receipts-cfdi";
-import { previewExpensePolicy } from "~/contexts/policies";
+import { previewExpensePolicy, createException, PoliciesError } from "~/contexts/policies";
 import { receiptTypeIdForConcepto } from "~/shared/ui/SubmitTravelWarper";
 import ExpensesForm from "~/shared/ui/ExpensesForm";
 
@@ -69,6 +69,7 @@ export type PolicyPreviewResult = {
 export type SubmitComprobanteActionResult =
   | { ok: true; intent: "previewPolicy"; preview: PolicyPreviewResult }
   | { ok: true; intent: "submit"; receiptId: number; isInternational: boolean }
+  | { ok: true; intent: "policy-exception:create"; exceptionId: number }
   | { ok: false; intent: string; error: string; code?: string };
 
 function bad(intent: string, error: string, status = 400, code?: string): Response {
@@ -149,6 +150,60 @@ export async function handleSubirComprobanteAction(
       // Preview nunca bloquea por fallo propio (paridad legacy: el submit revalida).
       const msg = err instanceof Error ? err.message : "preview failed";
       return bad("previewPolicy", msg, 200);
+    }
+  }
+
+  // ── Intent: crear excepción de política (RF-45) ──────────────────────────
+  // Paridad legacy `POST /refunds/exceptions` (refundController.createException):
+  // permiso `expense:submit`, `requestedById` tomado de la sesión, no del body.
+  if (intent === "policy-exception:create") {
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(String(formData.get("payload") ?? "{}")) as Record<string, unknown>;
+    } catch {
+      return bad("policy-exception:create", "Payload de excepción inválido.");
+    }
+    const justification = String(parsed.justification ?? "").trim();
+    const amountClaimed = Number(parsed.amountClaimed);
+    const excessAmount = Number(parsed.excessAmount);
+    if (!Number.isFinite(amountClaimed) || !Number.isFinite(excessAmount)) {
+      return bad("policy-exception:create", "Montos de la excepción inválidos.");
+    }
+    const receiptId = parsed.receiptId != null ? Number(parsed.receiptId) : null;
+    const policyId = parsed.policyId != null ? Number(parsed.policyId) : null;
+    const capId = parsed.capId != null ? Number(parsed.capId) : null;
+    const amountAllowed = parsed.amountAllowed != null ? Number(parsed.amountAllowed) : null;
+
+    try {
+      const created = await runInRls(session, async () =>
+        createException({
+          requestId,
+          receiptId,
+          policyId,
+          capId,
+          amountClaimed,
+          amountAllowed,
+          excessAmount,
+          justification,
+          requestedById: Number(session.user.user_id),
+        }),
+      );
+      return Response.json({
+        ok: true,
+        intent: "policy-exception:create",
+        exceptionId: created.exceptionId,
+      } satisfies SubmitComprobanteActionResult);
+    } catch (err) {
+      if (err instanceof Response) return err;
+      if (err instanceof PoliciesError) {
+        return bad("policy-exception:create", err.message, err.status, err.code);
+      }
+      const status =
+        typeof (err as { status?: unknown })?.status === "number"
+          ? (err as { status: number }).status
+          : 500;
+      const msg = err instanceof Error ? err.message : "No se pudo crear la excepción.";
+      return bad("policy-exception:create", msg, status);
     }
   }
 

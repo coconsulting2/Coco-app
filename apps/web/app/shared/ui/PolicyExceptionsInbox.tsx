@@ -30,6 +30,8 @@ export interface PolicyExceptionRow {
 
 export interface PolicyExceptionsInboxProps {
   exceptions: PolicyExceptionRow[];
+  /** Token CSRF emitido por el loader de la ruta anfitriona (double-submit). */
+  csrfToken?: string;
   /** Ruta destino del submit; por defecto la ruta actual (action del route). */
   action?: string;
 }
@@ -39,7 +41,7 @@ type DecideResult = { ok: true } | { ok: false; error: string };
 const formatMxn = (n: number, currency = "MXN") =>
   new Intl.NumberFormat("es-MX", { style: "currency", currency }).format(n);
 
-export default function PolicyExceptionsInbox({ exceptions, action }: PolicyExceptionsInboxProps) {
+export default function PolicyExceptionsInbox({ exceptions, csrfToken, action }: PolicyExceptionsInboxProps) {
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
   const [decisionFor, setDecisionFor] = useState<{ id: number; decision: "APPROVED" | "REJECTED" } | null>(null);
   const [note, setNote] = useState("");
@@ -62,6 +64,7 @@ export default function PolicyExceptionsInbox({ exceptions, action }: PolicyExce
     if (!decisionFor) return;
     const fd = new FormData();
     fd.set("intent", "policy-exception:decide");
+    fd.set("_csrf", csrfToken ?? "");
     fd.set("exceptionId", String(decisionFor.id));
     fd.set("decision", decisionFor.decision);
     fd.set("decisionNote", note || "");

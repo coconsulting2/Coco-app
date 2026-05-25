@@ -210,9 +210,11 @@ export async function action({
 }
 
 import AttendRequest from "~/shared/ui/AttendRequest";
+import AproveRequestModal from "~/shared/ui/AproveRequestModal";
 
 export default function PageRoute() {
   const data = useLoaderData() as LoaderData;
+  const needsAgencyQuotation = data.needsPlane || data.needsHotel;
 
   return (
     <section className="max-w-5xl mx-auto space-y-8">
@@ -222,13 +224,27 @@ export default function PageRoute() {
         </p>
         <h1 className="font-serif text-3xl md:text-4xl">Atender solicitud</h1>
       </header>
-      <AttendRequest
-        requestId={data.requestId}
-        needsPlane={data.needsPlane}
-        needsHotel={data.needsHotel}
-        flightDefaults={data.flightDefaults}
-        hotelDefaults={data.hotelDefaults}
-      />
+      {needsAgencyQuotation ? (
+        <AttendRequest
+          requestId={data.requestId}
+          needsPlane={data.needsPlane}
+          needsHotel={data.needsHotel}
+          flightDefaults={data.flightDefaults}
+          hotelDefaults={data.hotelDefaults}
+        />
+      ) : (
+        <div className="flex justify-end gap-4">
+          <AproveRequestModal
+            request_id={data.requestId}
+            title="Finalizar atención"
+            message="¿Marcar esta solicitud como atendida por agencia? (sin vuelo requerido en la solicitud)"
+            modal_type="success"
+            variant="filled"
+          >
+            Finalizar atención
+          </AproveRequestModal>
+        </div>
+      )}
     </section>
   );
 }
