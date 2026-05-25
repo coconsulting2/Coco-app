@@ -14,7 +14,7 @@
  * `Notification.requestPermission` / `pushManager.subscribe` son APIs del
  * navegador client-side, NO fetch a `/api/*`.
  */
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useFetcher } from "react-router";
 
 import type { NotificationPreferences } from "~/contexts/notifications/index.js";
@@ -50,14 +50,24 @@ export default function NotificationPreferences({ userId, initialPrefs }: Props)
   const [pushPermission, setPushPermission] = useState<string>("default");
   const saving = saveFetcher.state !== "idle";
 
+  // `useFetcher()` devuelve objeto nuevo en cada render; meterlo en un dep array
+  // dispara el efecto en cada render → loop ("Maximum update depth exceeded").
+  // Guardamos los métodos en refs estables.
+  const prefsLoadRef = useRef(prefsFetcher.load);
+  prefsLoadRef.current = prefsFetcher.load;
+  const vapidLoadRef = useRef(vapidFetcher.load);
+  vapidLoadRef.current = vapidFetcher.load;
+  const subscribeSubmitRef = useRef(subscribeFetcher.submit);
+  subscribeSubmitRef.current = subscribeFetcher.submit;
+
   // Carga inicial de preferencias (si no llegaron por prop).
   useEffect(() => {
     if (!userId) return;
-    if (!initialPrefs) prefsFetcher.load(prefsUrl);
+    if (!initialPrefs) prefsLoadRef.current(prefsUrl);
     if (typeof window !== "undefined" && "Notification" in window) {
       setPushPermission(Notification.permission);
     }
-  }, [userId, initialPrefs, prefsUrl, prefsFetcher]);
+  }, [userId, initialPrefs, prefsUrl]);
 
   // Sincroniza al recibir data de la resource route.
   useEffect(() => {
@@ -89,7 +99,7 @@ export default function NotificationPreferences({ userId, initialPrefs }: Props)
           userVisibleOnly: true,
           applicationServerKey: vapidKey,
         });
-        subscribeFetcher.submit(
+        subscribeSubmitRef.current(
           { _csrf: readCsrfToken(), subscription: JSON.stringify(subscription.toJSON()) },
           { method: "post", action: "/api/notifications/subscribe" },
         );
@@ -97,7 +107,7 @@ export default function NotificationPreferences({ userId, initialPrefs }: Props)
         console.error("Error subscribing to push:", err);
       }
     },
-    [subscribeFetcher],
+    [],
   );
 
   useEffect(() => {
@@ -115,8 +125,8 @@ export default function NotificationPreferences({ userId, initialPrefs }: Props)
     setPushPermission(permission);
     if (permission !== "granted") return;
     // Pide la VAPID key vía resource route; el efecto de arriba completa la suscripción.
-    vapidFetcher.load("/api/notifications/vapid-public-key");
-  }, [vapidFetcher]);
+    vapidLoadRef.current("/api/notifications/vapid-public-key");
+  }, []);
 
   const updatePref = (key: keyof Prefs, value: boolean) => {
     const next = { ...prefs, [key]: value };

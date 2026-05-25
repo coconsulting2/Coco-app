@@ -10,7 +10,7 @@
  * Prop-driven: recibe `initialNotifications` desde el loader que lo monta; si no
  * llegan, hace un `fetcher.load` inicial. Hace polling cada 30 s revalidando.
  */
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useFetcher } from "react-router";
 
 import type { NotificationItem } from "~/contexts/notifications/index.js";
@@ -45,18 +45,20 @@ export default function NotificationBell({ userId, initialNotifications }: Props
 
   const unreadCount = notifications.filter((n) => !n.isRead).length;
 
-  const refresh = useCallback(() => {
-    if (!userId) return;
-    listFetcher.load(listUrl);
-  }, [userId, listUrl, listFetcher]);
+  // `useFetcher()` devuelve un objeto nuevo en cada render; meter `listFetcher`
+  // (o un callback que lo capture) en un dep array dispara el efecto en cada
+  // render → loop infinito ("Maximum update depth exceeded"). Guardamos `load`
+  // en un ref estable y el efecto depende solo de valores estables.
+  const loadRef = useRef(listFetcher.load);
+  loadRef.current = listFetcher.load;
 
   // Carga inicial (si no llegaron por prop) + polling.
   useEffect(() => {
     if (!userId) return;
-    if (!initialNotifications) refresh();
-    const interval = setInterval(refresh, POLL_MS);
+    if (!initialNotifications) loadRef.current(listUrl);
+    const interval = setInterval(() => loadRef.current(listUrl), POLL_MS);
     return () => clearInterval(interval);
-  }, [userId, initialNotifications, refresh]);
+  }, [userId, listUrl, initialNotifications]);
 
   // Sincroniza el estado local cuando llega data de la resource route.
   useEffect(() => {
