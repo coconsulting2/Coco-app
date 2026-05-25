@@ -2,13 +2,11 @@
  * Author: Hector Lugo
  * Description: NotificationBell para el header global (M3-006), migrado a RR7.
  *
- * Data por loader (resource route `/api/notifications/:userId`) consumida vía
- * `useFetcher` — CERO `fetch('/api/...')` ni `apiRequest`. La marca de leído
- * muta por `useFetcher` contra la misma resource route (`PUT .../:id/read`),
- * incluyendo el token CSRF (`_csrf`) leído de la cookie no-httpOnly `coco_csrf`.
- *
- * Prop-driven: recibe `initialNotifications` desde el loader que lo monta; si no
- * llegan, hace un `fetcher.load` inicial. Hace polling cada 30 s revalidando.
+ * Prop-driven (regla 4: shared/ui NO hace fetch a `/api/*`): la lista
+ * `notifications` y el `csrfToken` llegan por prop desde el loader del layout
+ * `_app/_layout`. La marca de leído se postea con `useFetcher` al `action` de la
+ * ruta RR `/notificaciones` (no `/api`); la revalidación re-corre el loader del
+ * layout y refresca la lista. Estado local solo para el update optimista.
  */
 import { useState, useEffect, useRef } from "react";
 import { useFetcher } from "react-router";
@@ -16,56 +14,29 @@ import { useFetcher } from "react-router";
 import type { NotificationItem } from "~/contexts/notifications/index.js";
 
 interface Props {
-  userId: number | string;
-  initialNotifications?: NotificationItem[];
+  /** Lista provista por el loader del layout `_app/_layout` (regla 4: shared/ui
+   *  no hace fetch; los datos llegan por prop). */
+  notifications: NotificationItem[];
+  /** Token CSRF emitido por el loader del layout para el POST de mark-read. */
+  csrfToken: string;
 }
 
-const POLL_MS = 30_000;
-const CSRF_COOKIE = "coco_csrf";
-
-/** Lee la cookie CSRF (no httpOnly) en el navegador. SSR-safe (devuelve ""). */
-function readCsrfToken(): string {
-  if (typeof document === "undefined") return "";
-  const match = document.cookie
-    .split("; ")
-    .find((row) => row.startsWith(`${CSRF_COOKIE}=`));
-  return match ? decodeURIComponent(match.slice(CSRF_COOKIE.length + 1)) : "";
-}
-
-export default function NotificationBell({ userId, initialNotifications }: Props) {
-  const listUrl = `/api/notifications/${userId}`;
-  const listFetcher = useFetcher<NotificationItem[]>();
+export default function NotificationBell({ notifications: loaded, csrfToken }: Props) {
   const markFetcher = useFetcher();
 
-  const [notifications, setNotifications] = useState<NotificationItem[]>(
-    initialNotifications ?? [],
-  );
+  // Estado local solo para el update optimista al marcar como leído; se
+  // re-sincroniza cuando el loader revalida tras la mutación.
+  const [notifications, setNotifications] = useState<NotificationItem[]>(loaded);
   const [open, setOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
+  // `loaded` es data de loader (referencia estable hasta una revalidación): el
+  // efecto re-sincroniza el estado local sin loop.
+  useEffect(() => {
+    setNotifications(loaded);
+  }, [loaded]);
+
   const unreadCount = notifications.filter((n) => !n.isRead).length;
-
-  // `useFetcher()` devuelve un objeto nuevo en cada render; meter `listFetcher`
-  // (o un callback que lo capture) en un dep array dispara el efecto en cada
-  // render → loop infinito ("Maximum update depth exceeded"). Guardamos `load`
-  // en un ref estable y el efecto depende solo de valores estables.
-  const loadRef = useRef(listFetcher.load);
-  loadRef.current = listFetcher.load;
-
-  // Carga inicial (si no llegaron por prop) + polling.
-  useEffect(() => {
-    if (!userId) return;
-    if (!initialNotifications) loadRef.current(listUrl);
-    const interval = setInterval(() => loadRef.current(listUrl), POLL_MS);
-    return () => clearInterval(interval);
-  }, [userId, listUrl, initialNotifications]);
-
-  // Sincroniza el estado local cuando llega data de la resource route.
-  useEffect(() => {
-    if (listFetcher.state === "idle" && Array.isArray(listFetcher.data)) {
-      setNotifications(listFetcher.data);
-    }
-  }, [listFetcher.state, listFetcher.data]);
 
   // Cierra el dropdown al hacer click fuera.
   useEffect(() => {
@@ -79,15 +50,17 @@ export default function NotificationBell({ userId, initialNotifications }: Props
   }, []);
 
   const markAsRead = (notificationId: number) => {
-    // Optimista: marca en UI y muta vía resource route.
+    // Optimista en UI; muta vía el action de la ruta RR `/notificaciones`
+    // (regla 4: nada de `/api/*` desde shared/ui). La revalidación re-corre el
+    // loader del layout y re-sincroniza la lista.
     setNotifications((prev) =>
       prev.map((n) =>
         n.notificationId === notificationId ? { ...n, isRead: true } : n,
       ),
     );
     markFetcher.submit(
-      { _csrf: readCsrfToken() },
-      { method: "put", action: `/api/notifications/${notificationId}/read` },
+      { intent: "mark-read", notificationId: String(notificationId), _csrf: csrfToken },
+      { method: "post", action: "/notificaciones" },
     );
   };
 

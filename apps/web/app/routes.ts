@@ -18,6 +18,7 @@ export default [
     // Core
     route("/dashboard", "routes/_app/dashboard.tsx"),
     route("/perfil-usuario", "routes/_app/perfil-usuario.tsx"),
+    route("/notificaciones", "routes/_app/notificaciones.tsx"),
 
     // Identity (admin user CRUD)
     route("/crear-usuario", "routes/_app/crear-usuario.tsx"),

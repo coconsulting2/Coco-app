@@ -9,14 +9,16 @@ import { Link, useLocation } from "react-router";
 import MaterialIcon from "~/shared/ui/MaterialIcon";
 import LogoutButton from "~/shared/ui/Logout";
 import NotificationBell from "~/shared/ui/NotificationBell";
+import type { NotificationItem } from "~/contexts/notifications";
 
 type Props = {
   userName: string;
   buttonLabel: string;
-  userId?: number | string | null;
+  notifications: NotificationItem[];
+  csrfToken: string;
 };
 
-export default function PageHeader({ userName, buttonLabel, userId }: Props) {
+export default function PageHeader({ userName, buttonLabel, notifications, csrfToken }: Props) {
   const location = useLocation();
   const isCurrentRoute = location.pathname === "/perfil-usuario";
 
@@ -57,19 +59,9 @@ export default function PageHeader({ userName, buttonLabel, userId }: Props) {
         </span>
 
         <div className="flex items-center gap-0.5 sm:gap-1">
-          {/* NotificationBell: RR-native, self-loads via resource route
-              `/api/notifications/:userId` con useFetcher (sin apiRequest). */}
-          {userId != null ? (
-            <NotificationBell userId={userId} />
-          ) : (
-            <button
-              type="button"
-              className="p-2 rounded-[var(--radius-md)] text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-secondary)] hover:text-[var(--color-ink)] transition-colors"
-              aria-label="Notificaciones"
-            >
-              <MaterialIcon icon="notifications" color="currentColor" />
-            </button>
-          )}
+          {/* NotificationBell: prop-driven desde el loader del layout (regla 4:
+              shared/ui no hace fetch). Mark-read postea al action `/notificaciones`. */}
+          <NotificationBell notifications={notifications} csrfToken={csrfToken} />
           <LogoutButton>
             <div className="p-2 rounded-[var(--radius-md)] text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-secondary)] hover:text-[var(--color-ink)] transition-colors cursor-pointer">
               <MaterialIcon icon="logout" color="currentColor" />

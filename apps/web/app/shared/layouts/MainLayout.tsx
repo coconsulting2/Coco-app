@@ -12,12 +12,14 @@ import { type ReactNode } from "react";
 import Sidebar from "./Sidebar";
 import PageHeader from "./PageHeader";
 import type { UserRole } from "~/shared/types/roles";
+import type { NotificationItem } from "~/contexts/notifications";
 
 type Props = {
   userName: string;
   role: UserRole;
   buttonLabel: string;
-  userId?: number | string | null;
+  notifications: NotificationItem[];
+  csrfToken: string;
   showMessages?: boolean;
   children: ReactNode;
 };
@@ -26,7 +28,8 @@ export default function MainLayout({
   userName,
   role,
   buttonLabel,
-  userId,
+  notifications,
+  csrfToken,
   showMessages = false,
   children,
 }: Props) {
@@ -34,7 +37,7 @@ export default function MainLayout({
     <>
       <div id="app" className={showMessages ? "list-messages" : ""}>
         <header id="page-header">
-          <PageHeader userName={userName} buttonLabel={buttonLabel} userId={userId ?? null} />
+          <PageHeader userName={userName} buttonLabel={buttonLabel} notifications={notifications} csrfToken={csrfToken} />
         </header>
 
         <aside id="sidebar">
