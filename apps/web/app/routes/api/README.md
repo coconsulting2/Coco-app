@@ -13,15 +13,19 @@ files: ["apps/web/app/routes/_app/**", "apps/web/app/shared/ui/**"],
 
 ## Endpoints públicos (Swagger M1/M2) — KEEP
 
-| File | Dispatcher | Documentado en |
-|---|---|---|
-| `applicant.$.tsx` | `dispatchApplicantApi` | swagger-m2 |
-| `authorizer.$.tsx` | `dispatchAuthorizerApi` | swagger-m2 |
-| `accounts-payable.$.tsx` | `dispatchAccountsPayableApi` | swagger-m1 + m2 |
-| `travel-agent.$.tsx` | `dispatchTravelAgentApi` | swagger-m1 |
-| `comprobantes.$.tsx` | `dispatchComprobantesApi` | swagger-m1 |
-| `files.$.tsx` | `dispatchFilesApi` | swagger-m1 |
-| `user.$.tsx` | `dispatchUserApi` | swagger-m2 |
+Todos REGISTRADOS en `app/routes.ts` dentro del bloque `...prefix("api", [ … ])`.
+Un dispatcher KEEP sin entrada en `routes.ts` → 404 para clientes externos
+(este fue el caso de `accounts-payable.$.tsx` y `files.$.tsx`, ya corregido).
+
+| File | Dispatcher | Documentado en | Registrado en `routes.ts` |
+|---|---|---|---|
+| `applicant.$.tsx` | `dispatchApplicantApi` | swagger-m2 | ✅ `applicant/*` |
+| `authorizer.$.tsx` | `dispatchAuthorizerApi` | swagger-m2 | ✅ `authorizer/*` |
+| `accounts-payable.$.tsx` | `dispatchAccountsPayableApi` | swagger-m1 + m2 | ✅ `accounts-payable/*` |
+| `travel-agent.$.tsx` | `dispatchTravelAgentApi` | swagger-m1 | ✅ `travel-agent/*` |
+| `comprobantes.$.tsx` | `dispatchComprobantesApi` | swagger-m1 | ✅ `comprobantes/*` |
+| `files.$.tsx` | `dispatchFilesApi` | swagger-m1 | ✅ `files/*` |
+| `user.$.tsx` | `dispatchUserApi` | swagger-m2 | ✅ `user/*` |
 
 Tipos generados desde estos YAML: `@coco/contracts` (regenerar con
 `bun --filter @coco/contracts generate` tras cualquier cambio al YAML).
@@ -33,25 +37,27 @@ A medida que las páginas se migran a loaders/actions, cada uno se vuelve
 elegible para retiro:
 
 ```
-admin.$.tsx
 approval-substitutes.$.tsx
 employee-categories.$.tsx
 exchange-rate.$.tsx
-export.$.tsx
 fx.$.tsx
-flights.$.tsx
-hotels.$.tsx
 keys.$.tsx
 notifications.$.tsx
-onboarding-import.$.tsx
 organizations.$.tsx
 policies.$.tsx
 refunds.$.tsx
-report.$.tsx
 viajes.$.tsx
 viaticos-policy.$.tsx
 workflow-rules.$.tsx
 ```
+
+**Retirados (2026-05-25, Fase D):** `admin.$.tsx`, `export.$.tsx`,
+`flights.$.tsx`, `hotels.$.tsx`, `onboarding-import.$.tsx`, `report.$.tsx` —
+no estaban registrados en `routes.ts` (404), sin consumer interno ni doc de
+contrato externo. Borrados junto con sus dispatchers
+(`adminApi.server`, `exportApi.server`, `flightsApi.server`, `hotelsApi.server`,
+`onboarding-importApi.server`, `reportApi.server`). Los use-cases de slice
+subyacentes permanecen intactos.
 
 **Procedimiento de retiro:**
 

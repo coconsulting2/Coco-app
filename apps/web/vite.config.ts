@@ -44,13 +44,18 @@ export default defineConfig({
   resolve: {
     alias: [
       // Workspace packages — explicit so Vite resolves to TS source.
-      { find: "@coco/db", replacement: path.resolve(repoRoot, "packages/db/src/index.ts") },
+      // El `find` bare va anclado con regex (`$`) para que NO capture los
+      // subpaths (`@coco/x/...`); si fuera string, Vite hace match por prefijo
+      // y reescribiría `@coco/x/sub` → `.../index.ts/sub` (ENOTDIR en build).
+      { find: /^@coco\/db$/, replacement: path.resolve(repoRoot, "packages/db/src/index.ts") },
       { find: /^@coco\/db\/(.*)$/, replacement: path.resolve(repoRoot, "packages/db/src") + "/$1" },
-      { find: "@coco/contracts", replacement: path.resolve(repoRoot, "packages/contracts/src/index.ts") },
+      { find: /^@coco\/shared-config$/, replacement: path.resolve(repoRoot, "packages/shared-config/src/index.ts") },
+      { find: /^@coco\/shared-config\/(.*)$/, replacement: path.resolve(repoRoot, "packages/shared-config/src") + "/$1" },
+      { find: /^@coco\/contracts$/, replacement: path.resolve(repoRoot, "packages/contracts/src/index.ts") },
       { find: /^@coco\/contracts\/(.*)$/, replacement: path.resolve(repoRoot, "packages/contracts/src") + "/$1" },
-      { find: "@coco/integrations", replacement: path.resolve(repoRoot, "packages/integrations/src/index.ts") },
+      { find: /^@coco\/integrations$/, replacement: path.resolve(repoRoot, "packages/integrations/src/index.ts") },
       { find: /^@coco\/integrations\/(.*)$/, replacement: path.resolve(repoRoot, "packages/integrations/src") + "/$1" },
-      { find: "@coco/ui-kit", replacement: path.resolve(repoRoot, "packages/ui-kit/src/index.ts") },
+      { find: /^@coco\/ui-kit$/, replacement: path.resolve(repoRoot, "packages/ui-kit/src/index.ts") },
       { find: /^@coco\/ui-kit\/(.*)$/, replacement: path.resolve(repoRoot, "packages/ui-kit/src") + "/$1" },
       // App-local aliases (preserved from pre-monorepo layout).
       { find: /^~\/(.*)$/, replacement: path.resolve(__dirname, "app") + "/$1" },

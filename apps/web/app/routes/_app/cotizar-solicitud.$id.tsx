@@ -17,6 +17,7 @@ import { assertCsrf } from "~/platform/csrf/csrf.server";
 import {
   confirmImposedFee,
   CxpRequestNotFoundError,
+  CxpRequestNotAttendableError,
 } from "~/contexts/accounts-payable";
 import { getRequestDetail } from "~/contexts/travel-requests/application/applicantQueryService.js";
 
@@ -55,7 +56,7 @@ export async function loader({ request, params }: LoaderFunctionArgs): Promise<L
 }
 
 export type CotizarActionResult =
-  | { ok: true; newStatusId: 5 | 7; needsAgency: boolean }
+  | { ok: true; newStatusId: 5 | 6; needsAgency: boolean }
   | { ok: false; error: string };
 
 export async function action({
@@ -94,10 +95,13 @@ export async function action({
     throw redirect("/cotizaciones");
   } catch (err) {
     if (err instanceof Response) throw err;
-    if (err instanceof CxpRequestNotFoundError) {
+    if (
+      err instanceof CxpRequestNotFoundError ||
+      err instanceof CxpRequestNotAttendableError
+    ) {
       return Response.json(
         { ok: false, error: err.message } satisfies CotizarActionResult,
-        { status: 404 },
+        { status: err.status },
       );
     }
     const msg = err instanceof Error ? err.message : "No se pudo registrar el monto.";

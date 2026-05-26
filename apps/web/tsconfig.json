@@ -15,6 +15,8 @@
     "paths": {
       "@coco/db": ["../../packages/db/src/index.ts"],
       "@coco/db/*": ["../../packages/db/src/*"],
+      "@coco/shared-config": ["../../packages/shared-config/src/index.ts"],
+      "@coco/shared-config/*": ["../../packages/shared-config/src/*"],
       "@coco/contracts": ["../../packages/contracts/src/index.ts"],
       "@coco/contracts/*": ["../../packages/contracts/src/*"],
       "@coco/integrations": ["../../packages/integrations/src/index.ts"],
@@ -37,6 +39,7 @@
     }
   },
   "references": [
+    { "path": "../../packages/shared-config" },
     { "path": "../../packages/db" },
     { "path": "../../packages/contracts" },
     { "path": "../../packages/integrations" },

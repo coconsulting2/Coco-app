@@ -9,8 +9,9 @@
  */
 import { type ReactNode } from "react";
 
-import Sidebar from "./Sidebar";
-import PageHeader from "./PageHeader";
+import Sidebar from "~/shared/layouts/Sidebar";
+import PageHeader from "~/shared/layouts/PageHeader";
+import AppAlertHost from "~/shared/ui/AppAlertHost";
 import type { UserRole } from "~/shared/types/roles";
 import type { NotificationItem } from "~/contexts/notifications";
 
@@ -50,6 +51,11 @@ export default function MainLayout({
       </div>
 
       <div id="sidebar-overlay" />
+
+      {/* Host global de avisos modales (showAppAlert). Montado UNA vez aquí para
+          que AttendRequest/ExpensesForm/CxpQuoteRequest/FinisCheck puedan disparar
+          el evento coco:alert desde cualquier ruta. Paridad MainLayout.astro:72. */}
+      <AppAlertHost />
 
       <style>{`
         #app {

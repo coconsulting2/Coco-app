@@ -10,9 +10,9 @@ function getSubpath(params: { "*"?: string }): string {
 }
 
 export async function loader({ request, params }: LoaderFunctionArgs) {
-  return dispatchViajesApi({ request, subpath: getSubpath(params as any) });
+  return dispatchViajesApi({ request, subpath: getSubpath(params) });
 }
 
 export async function action({ request, params }: ActionFunctionArgs) {
-  return dispatchViajesApi({ request, subpath: getSubpath(params as any) });
+  return dispatchViajesApi({ request, subpath: getSubpath(params) });
 }

@@ -6,12 +6,14 @@
  * `send-for-validation` al action de la route padre. Sin llamadas al API legacy ni token.
  */
 import { useEffect, useState } from "react";
-import { useFetcher } from "react-router";
+import { Link, useFetcher } from "react-router";
 import type { RequestReceiptsForValidation } from "~/contexts/receipts-cfdi";
 import ModalWrapper from "~/shared/ui/ModalWrapper";
 import Toast from "~/shared/ui/Toast";
+import { requestAllowsReceiptUpload } from "~/shared/utils/receiptUploadAccess";
 
 interface Props {
+  requestId: number;
   receipts: RequestReceiptsForValidation | null;
 }
 
@@ -20,12 +22,12 @@ type FetcherResult =
   | { ok: false; error: string; code?: string };
 
 const VALIDATION_BADGE: Record<string, string> = {
-  Aprobado: "bg-success-50 text-success-700 border-success-300",
-  Rechazado: "bg-danger-50 text-danger-600 border-danger-300",
+  Aprobado: "bg-success-50 text-success-500 border-success-300",
+  Rechazado: "bg-error-50 text-error-500 border-error-300",
   Pendiente: "bg-[var(--color-surface-secondary)] text-[var(--color-ink-muted)] border-[var(--color-neutral-300)]",
 };
 
-export default function RequestValidationStatus({ receipts }: Props) {
+export default function RequestValidationStatus({ requestId, receipts }: Props) {
   const fetcher = useFetcher<FetcherResult>();
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
 
@@ -49,6 +51,7 @@ export default function RequestValidationStatus({ receipts }: Props) {
   }
 
   const canSubmit = receipts.requestStatusId === 6 && receipts.items.length > 0;
+  const canUploadReceipts = requestAllowsReceiptUpload(receipts.requestStatusId);
   const handleConfirm = () => {
     fetcher.submit({ intent: "send-for-validation" }, { method: "post" });
   };
@@ -64,6 +67,20 @@ export default function RequestValidationStatus({ receipts }: Props) {
               {receipts.requestStatusName ? ` · Estado: ${receipts.requestStatusName}` : ""}.
             </p>
           </div>
+          {canUploadReceipts ? (
+            <Link
+              to={`/subir-comprobante/${requestId}`}
+              className="shrink-0 inline-flex items-center rounded-[var(--radius-md)] bg-primary-500 px-4 py-2 text-sm font-medium text-white hover:bg-primary-400 transition-colors"
+            >
+              + Agregar comprobante
+            </Link>
+          ) : (
+            <p className="shrink-0 max-w-xs text-right text-xs text-[var(--color-ink-muted)]">
+              Los comprobantes se pueden agregar cuando la solicitud vaya en{" "}
+              <strong>Cotización del Viaje</strong> o fases posteriores (tras
+              aprobación N2).
+            </p>
+          )}
         </header>
 
         {receipts.items.length === 0 ? (
@@ -73,27 +90,39 @@ export default function RequestValidationStatus({ receipts }: Props) {
         ) : (
           <ul className="divide-y divide-[var(--color-neutral-200)]">
             {receipts.items.map((item) => (
-              <li key={item.receiptId} className="px-5 py-4 flex items-center justify-between gap-4">
-                <div className="min-w-0">
-                  <p className="font-medium truncate">{item.receiptTypeName}</p>
-                  {item.cfdi ? (
-                    <p className="text-xs text-[var(--color-ink-muted)] truncate">
-                      {item.cfdi.nombreEmisor} · {item.cfdi.rfcEmisor} · UUID {item.cfdi.uuid}
-                    </p>
-                  ) : (
-                    <p className="text-xs text-[var(--color-ink-muted)]">Comprobante internacional</p>
-                  )}
+              <li key={item.receiptId} className="px-5 py-4">
+                <div className="flex items-center justify-between gap-4">
+                  <div className="min-w-0">
+                    <p className="font-medium truncate">{item.receiptTypeName}</p>
+                    {item.cfdi ? (
+                      <p className="text-xs text-[var(--color-ink-muted)] truncate">
+                        {item.cfdi.nombreEmisor} · {item.cfdi.rfcEmisor} · UUID {item.cfdi.uuid}
+                      </p>
+                    ) : (
+                      <p className="text-xs text-[var(--color-ink-muted)]">Comprobante internacional</p>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-3 shrink-0">
+                    <span className="tabular-nums text-sm">${item.amount.toFixed(2)}</span>
+                    <span
+                      className={`text-[10px] uppercase tracking-wide px-2 py-1 rounded border ${
+                        VALIDATION_BADGE[item.validation] ?? VALIDATION_BADGE.Pendiente
+                      }`}
+                    >
+                      {item.validation}
+                    </span>
+                  </div>
                 </div>
-                <div className="flex items-center gap-3 shrink-0">
-                  <span className="tabular-nums text-sm">${item.amount.toFixed(2)}</span>
-                  <span
-                    className={`text-[10px] uppercase tracking-wide px-2 py-1 rounded border ${
-                      VALIDATION_BADGE[item.validation] ?? VALIDATION_BADGE.Pendiente
-                    }`}
-                  >
-                    {item.validation}
-                  </span>
-                </div>
+                {item.validation === "Rechazado" && canUploadReceipts && (
+                  <div className="mt-3 flex items-center justify-end">
+                    <Link
+                      to={`/resubir-comprobante/${requestId}?replace=${item.receiptId}`}
+                      className="inline-flex items-center rounded-[var(--radius-md)] border border-accent-400 px-3 py-1.5 text-sm font-medium text-accent-500 hover:bg-accent-50 transition-colors"
+                    >
+                      Resubir
+                    </Link>
+                  </div>
+                )}
               </li>
             ))}
           </ul>

@@ -10,7 +10,7 @@
  * intent vía el use-case `decideException` del slice policies.
  */
 import { useEffect, useState } from "react";
-import { useFetcher } from "react-router";
+import { useFetcher, useRevalidator } from "react-router";
 import Button from "~/shared/ui/Button";
 import Toast from "~/shared/ui/Toast";
 import Modal from "~/shared/ui/Modal";
@@ -47,6 +47,7 @@ export default function PolicyExceptionsInbox({ exceptions, csrfToken, action }:
   const [note, setNote] = useState("");
 
   const fetcher = useFetcher<DecideResult>();
+  const revalidator = useRevalidator();
   const busy = fetcher.state !== "idle";
 
   useEffect(() => {
@@ -55,10 +56,14 @@ export default function PolicyExceptionsInbox({ exceptions, csrfToken, action }:
       setToast({ message: "Excepción resuelta.", type: "success" });
       setDecisionFor(null);
       setNote("");
+      // Recarga los datos del loader anfitrión para que la fila decidida
+      // desaparezca de la lista (regla del proyecto: refresco con
+      // useRevalidator, sin refetch a /api).
+      revalidator.revalidate();
     } else {
       setToast({ message: fetcher.data.error, type: "error" });
     }
-  }, [fetcher.state, fetcher.data]);
+  }, [fetcher.state, fetcher.data, revalidator]);
 
   function decide() {
     if (!decisionFor) return;

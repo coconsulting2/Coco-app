@@ -67,7 +67,11 @@ export type { CxpAttendRepository } from "~/contexts/accounts-payable/domain/por
 
 import { PrismaCxpAttendRepository } from "~/contexts/accounts-payable/infrastructure/PrismaCxpAttendRepository.js";
 import * as confirmImposedFeeModule from "~/contexts/accounts-payable/application/confirmImposedFee.js";
-export { CxpRequestNotFoundError } from "~/contexts/accounts-payable/application/confirmImposedFee.js";
+export {
+  CxpRequestNotFoundError,
+  CxpRequestNotAttendableError,
+} from "~/contexts/accounts-payable/application/confirmImposedFee.js";
+export type { CxpAttendState } from "~/contexts/accounts-payable/domain/ports/CxpAttendRepository.js";
 
 const defaultCxpAttendRepo = new PrismaCxpAttendRepository();
 

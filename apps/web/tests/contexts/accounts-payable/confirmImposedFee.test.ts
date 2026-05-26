@@ -1,7 +1,12 @@
 /**
- * Unit tests del use-case `confirmImposedFee` con stub del port
- * `CxpAttendRepository`. Cubre: avance a status 5 cuando requiere agencia,
- * avance a status 7 cuando no, request inexistente, e imposedFee inválido.
+ * Unit tests del use-case canónico `confirmImposedFee` con stub del port
+ * `CxpAttendRepository`. Cubre la paridad con el legacy
+ * `accountsPayableController.attendTravelRequest`:
+ *   - sin agencia → status 6 (Comprobación de gastos)
+ *   - con vuelo/hotel → status 5 (Atención Agencia)
+ *   - status ≠ 4 → rechaza (no atendible)
+ *   - request inexistente → 404
+ *   - imposedFee inválido → rechaza
  */
 import { describe, expect, it, vi } from "vitest";
 
@@ -12,35 +17,64 @@ vi.mock("~/platform/logger/log/logger.js", () => ({
 import {
   confirmImposedFee,
   CxpRequestNotFoundError,
+  CxpRequestNotAttendableError,
 } from "~/contexts/accounts-payable/application/confirmImposedFee.js";
-import type { CxpAttendRepository } from "~/contexts/accounts-payable/domain/ports/CxpAttendRepository.js";
+import type {
+  CxpAttendRepository,
+  CxpAttendState,
+} from "~/contexts/accounts-payable/domain/ports/CxpAttendRepository.js";
 
-function makeRepo(
-  needs: { needsPlane: boolean; needsHotel: boolean } | null,
-): CxpAttendRepository {
+function makeRepo(state: CxpAttendState | null): CxpAttendRepository {
   return {
-    getAgencyNeeds: vi.fn(async () => needs),
+    getAttendState: vi.fn(async () => state),
     assignImposedFee: vi.fn(async () => undefined),
   };
 }
 
 describe("confirmImposedFee", () => {
-  it("avanza a status 5 cuando la Request requiere agencia (vuelo)", async () => {
-    const repo = makeRepo({ needsPlane: true, needsHotel: false });
+  it("(a) sin agencia → avanza a status 6 (Comprobación de gastos)", async () => {
+    const repo = makeRepo({ requestStatusId: 4, needsPlane: false, needsHotel: false });
 
-    const result = await confirmImposedFee({ requestId: 1, imposedFee: 3000 }, { attendRepo: repo });
+    const result = await confirmImposedFee(
+      { requestId: 2, imposedFee: 1500 },
+      { attendRepo: repo },
+    );
+
+    expect(result).toEqual({ newStatusId: 6, needsAgency: false });
+    expect(repo.assignImposedFee).toHaveBeenCalledWith(2, 1500, 6);
+  });
+
+  it("(b) con vuelo → avanza a status 5 (Atención Agencia)", async () => {
+    const repo = makeRepo({ requestStatusId: 4, needsPlane: true, needsHotel: false });
+
+    const result = await confirmImposedFee(
+      { requestId: 1, imposedFee: 3000 },
+      { attendRepo: repo },
+    );
 
     expect(result).toEqual({ newStatusId: 5, needsAgency: true });
     expect(repo.assignImposedFee).toHaveBeenCalledWith(1, 3000, 5);
   });
 
-  it("avanza a status 7 cuando no requiere agencia", async () => {
-    const repo = makeRepo({ needsPlane: false, needsHotel: false });
+  it("(b') con hotel → avanza a status 5 (Atención Agencia)", async () => {
+    const repo = makeRepo({ requestStatusId: 4, needsPlane: false, needsHotel: true });
 
-    const result = await confirmImposedFee({ requestId: 2, imposedFee: 1500 }, { attendRepo: repo });
+    const result = await confirmImposedFee(
+      { requestId: 3, imposedFee: 2000 },
+      { attendRepo: repo },
+    );
 
-    expect(result).toEqual({ newStatusId: 7, needsAgency: false });
-    expect(repo.assignImposedFee).toHaveBeenCalledWith(2, 1500, 7);
+    expect(result).toEqual({ newStatusId: 5, needsAgency: true });
+    expect(repo.assignImposedFee).toHaveBeenCalledWith(3, 2000, 5);
+  });
+
+  it("(c) status ≠ 4 → rechaza con CxpRequestNotAttendableError y no muta", async () => {
+    const repo = makeRepo({ requestStatusId: 6, needsPlane: true, needsHotel: false });
+
+    await expect(
+      confirmImposedFee({ requestId: 4, imposedFee: 100 }, { attendRepo: repo }),
+    ).rejects.toBeInstanceOf(CxpRequestNotAttendableError);
+    expect(repo.assignImposedFee).not.toHaveBeenCalled();
   });
 
   it("lanza CxpRequestNotFoundError cuando la Request no existe", async () => {
@@ -53,7 +87,7 @@ describe("confirmImposedFee", () => {
   });
 
   it("rechaza un imposedFee negativo o no finito", async () => {
-    const repo = makeRepo({ needsPlane: false, needsHotel: false });
+    const repo = makeRepo({ requestStatusId: 4, needsPlane: false, needsHotel: false });
 
     await expect(
       confirmImposedFee({ requestId: 1, imposedFee: -5 }, { attendRepo: repo }),
@@ -61,6 +95,6 @@ describe("confirmImposedFee", () => {
     await expect(
       confirmImposedFee({ requestId: 1, imposedFee: Number.NaN }, { attendRepo: repo }),
     ).rejects.toThrow(/non-negative finite/);
-    expect(repo.getAgencyNeeds).not.toHaveBeenCalled();
+    expect(repo.getAttendState).not.toHaveBeenCalled();
   });
 });

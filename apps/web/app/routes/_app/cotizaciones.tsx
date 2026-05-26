@@ -1,7 +1,8 @@
 /**
  * @module cotizaciones
- * @description Bandeja CxP — lista solicitudes en status 6 (Cotización del
- * Viaje, aka "Aprobación de cotización"). Loader llama
+ * @description Bandeja CxP — lista solicitudes en status 4 (Cotización del
+ * Viaje). Tras la aprobación de N2 las solicitudes quedan en status 4 a la
+ * espera de que CxP confirme el monto aprobado. Loader llama
  * `listTravelRequestsByStatusIds`. Link a `cotizar-solicitud/:id`.
  */
 import type { LoaderFunctionArgs } from "react-router";
@@ -14,7 +15,7 @@ export function meta() {
   return [{ title: "Cotizaciones — CocoConsulting" }];
 }
 
-const STATUS_IDS = [6];
+const STATUS_IDS = [4];
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const session = await requirePermissions(request, "accounts_payable:attend");
@@ -77,7 +78,7 @@ function RequestsTable({ rows }: { rows: Row[] }) {
               <td className="px-4 py-2">
                 <Link
                   to={`/cotizar-solicitud/${r.requestId}`}
-                  className="text-primary-600 hover:underline"
+                  className="text-primary-500 hover:underline"
                 >
                   Abrir
                 </Link>

@@ -90,6 +90,7 @@ type FetcherData =
   | { ok: true; intent: "searchHotels"; offers: NormalizedHotelOffer[] }
   | { ok: true; intent: "selectFlight" }
   | { ok: true; intent: "selectHotel"; saved: NormalizedHotelOffer }
+  | { ok: true; intent: "fetchHotelRates"; offer: NormalizedHotelOffer }
   | { ok: false; intent: string; error: string };
 
 export default function AttendRequest({
@@ -155,6 +156,28 @@ export default function AttendRequest({
     if (data.intent === "selectHotel") {
       setSelectedHotel(data.saved);
       setToast({ message: "Opción de hospedaje guardada en la solicitud.", type: "success" });
+      return;
+    }
+    if (data.intent === "fetchHotelRates") {
+      const enriched = data.offer;
+      setHotelOffers((prev) =>
+        prev.map((h) =>
+          h.searchResultId === enriched.searchResultId || h.id === enriched.id ? enriched : h,
+        ),
+      );
+      setSelectedHotel((prev) =>
+        prev &&
+        (prev.searchResultId === enriched.searchResultId || prev.id === enriched.id)
+          ? enriched
+          : prev,
+      );
+      const count = enriched.rates?.length ?? 0;
+      setToast({
+        message: count
+          ? `Se resolvieron ${count} tarifa(s) para ${enriched.hotelName}.`
+          : `Sin tarifas disponibles para ${enriched.hotelName}.`,
+        type: "success",
+      });
     }
   }, [fetcher.state, fetcher.data]);
 
@@ -222,6 +245,21 @@ export default function AttendRequest({
   function seleccionarHotel(offer: NormalizedHotelOffer) {
     const fd = new FormData();
     fd.set("intent", "selectHotel");
+    fd.set("offer", JSON.stringify(offer));
+    submit(fd);
+  }
+
+  function verTarifas(offer: NormalizedHotelOffer) {
+    const searchResultId = offer.searchResultId ?? offer.id;
+    if (!searchResultId) {
+      showAppAlert("Esta opción no tiene un identificador de búsqueda para resolver tarifas.", {
+        variant: "warning",
+      });
+      return;
+    }
+    const fd = new FormData();
+    fd.set("intent", "fetchHotelRates");
+    fd.set("searchResultId", searchResultId);
     fd.set("offer", JSON.stringify(offer));
     submit(fd);
   }
@@ -477,14 +515,47 @@ export default function AttendRequest({
                 {h.stars > 0 ? (
                   <p className="text-xs text-gray-500">Valoración: {h.stars}★</p>
                 ) : null}
-                <button
-                  type="button"
-                  disabled={submitting}
-                  onClick={() => seleccionarHotel(h)}
-                  className="mt-1 w-full py-2 rounded-md border border-amber-800 text-amber-900 text-sm font-medium hover:bg-amber-50 disabled:opacity-50"
-                >
-                  Seleccionar hospedaje
-                </button>
+                {h.ratesFetched && h.rates && h.rates.length > 0 ? (
+                  <ul className="mt-1 space-y-1 border-t border-gray-100 pt-2">
+                    {h.rates.map((rate) => (
+                      <li
+                        key={rate.rateId}
+                        className="flex justify-between gap-2 text-xs text-gray-700"
+                      >
+                        <span>
+                          {rate.roomName ?? rate.rateName ?? "Tarifa"}
+                          {rate.boardType ? ` · ${rate.boardType}` : ""}
+                        </span>
+                        <span className="font-medium tabular-nums">
+                          {rate.totalAmount.toLocaleString("es-MX", {
+                            maximumFractionDigits: 2,
+                          })}{" "}
+                          {rate.totalCurrency}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+                <div className="mt-1 flex flex-col gap-2 sm:flex-row">
+                  <button
+                    type="button"
+                    disabled={submitting}
+                    onClick={() => verTarifas(h)}
+                    className="w-full py-2 rounded-md border border-gray-400 text-gray-700 text-sm font-medium hover:bg-gray-50 disabled:opacity-50"
+                  >
+                    {submitting && fetcher.formData?.get("intent") === "fetchHotelRates"
+                      ? "Cargando tarifas…"
+                      : "Ver tarifas"}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={submitting}
+                    onClick={() => seleccionarHotel(h)}
+                    className="w-full py-2 rounded-md border border-amber-800 text-amber-900 text-sm font-medium hover:bg-amber-50 disabled:opacity-50"
+                  >
+                    Seleccionar hospedaje
+                  </button>
+                </div>
               </article>
             ))}
           </div>

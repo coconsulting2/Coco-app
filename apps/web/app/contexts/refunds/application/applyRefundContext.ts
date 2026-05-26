@@ -3,6 +3,7 @@
  * @description Helper invocado al crear/confirmar una solicitud para llenar
  * Request.tripEndDate y Request.policyEvaluationSnapshot (M2-006 RF-46).
  */
+import { Prisma } from "@coco/db";
 import { snapshotPolicyForRequest } from "~/contexts/policies/application/policyService.js";
 
 const HOME_COUNTRY_ID = 1;
@@ -30,9 +31,23 @@ function maxEndingDate(routes: RouteRow[]): Date | null {
   return max;
 }
 
+/**
+ * Port mínimo de transacción que este helper consume. El cliente Prisma
+ * extendido completo (`WebTransactionClient`) es asignable a este tipo, y
+ * los stubs de test también — sin `unknown` laxo: los args están tipados con
+ * los argument types generados por Prisma.
+ */
 type Tx = {
-  routeRequest: { findMany(args: unknown): Promise<Array<{ route: RouteRow | null }>> };
-  request: { update(args: unknown): Promise<unknown> };
+  routeRequest: {
+    findMany(
+      args: { where: Prisma.RouteRequestWhereInput; include: { route: true } },
+    ): Promise<Array<{ route: RouteRow | null }>>;
+  };
+  request: {
+    update(
+      args: { where: Prisma.RequestWhereUniqueInput; data: { tripEndDate: Date } },
+    ): Promise<unknown>;
+  };
 };
 
 export async function applyRefundContextToRequest(
@@ -47,7 +62,7 @@ export async function applyRefundContextToRequest(
   });
   const routes = routeRequests
     .map((rr) => rr.route)
-    .filter((r): r is RouteRow => Boolean(r));
+    .filter((r): r is NonNullable<typeof r> => r !== null);
 
   const tripEndDate = maxEndingDate(routes);
   if (tripEndDate) {

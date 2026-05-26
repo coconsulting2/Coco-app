@@ -5,12 +5,13 @@
  * legacy, ahora tipada.
  */
 import prisma from "~/platform/db/prisma.server.js";
-import type { CxpAttendRepository } from "~/contexts/accounts-payable/domain/ports/CxpAttendRepository.js";
+import type {
+  CxpAttendRepository,
+  CxpAttendState,
+} from "~/contexts/accounts-payable/domain/ports/CxpAttendRepository.js";
 
 export class PrismaCxpAttendRepository implements CxpAttendRepository {
-  async getAgencyNeeds(
-    requestId: number,
-  ): Promise<{ needsPlane: boolean; needsHotel: boolean } | null> {
+  async getAttendState(requestId: number): Promise<CxpAttendState | null> {
     const request = await prisma.request.findUnique({
       where: { requestId: Number(requestId) },
       include: {
@@ -20,13 +21,13 @@ export class PrismaCxpAttendRepository implements CxpAttendRepository {
     if (!request) return null;
     const needsPlane = request.routeRequests.some((rr) => rr.route?.planeNeeded === true);
     const needsHotel = request.routeRequests.some((rr) => rr.route?.hotelNeeded === true);
-    return { needsPlane, needsHotel };
+    return { requestStatusId: Number(request.requestStatusId), needsPlane, needsHotel };
   }
 
   async assignImposedFee(
     requestId: number,
     imposedFee: number,
-    nextStatusId: 5 | 7,
+    nextStatusId: 5 | 6,
   ): Promise<void> {
     await prisma.request.update({
       where: { requestId: Number(requestId) },

@@ -11,7 +11,11 @@
     "types": ["node"],
     "baseUrl": ".",
     "paths": {
-      "#/*": ["./src/*"]
+      "#/*": ["./src/*"],
+      "@coco/db": ["../db/src/index.ts"],
+      "@coco/db/*": ["../db/src/*"],
+      "@coco/integrations": ["../integrations/src/index.ts"],
+      "@coco/integrations/*": ["../integrations/src/*"]
     }
   },
   "include": ["src/**/*"],

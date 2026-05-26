@@ -11,6 +11,26 @@ function looksLikeEncryptedIvPlusBase64(str) {
   return /^[0-9a-f]{32}$/i.test(str.slice(0, 32));
 }
 
+/**
+ * Cifra PII (email/teléfono) en el formato histórico de adminService.encrypt:
+ * IV de 16 bytes en hex (32 chars) + ciphertext base64 — exactamente lo que
+ * espera `decrypt` abajo. Paridad 1:1 con `TC3005B.501-Backend/services/adminService.js`.
+ * Defensivo: si el valor no es un string no-vacío (p.ej. teléfono nulo), lo
+ * devuelve tal cual (mismo criterio que `decrypt`).
+ * @param {string} data
+ * @returns {string}
+ */
+export const encrypt = (data) => {
+  if (!data || typeof data !== "string") {
+    return data;
+  }
+  const IV = crypto.randomBytes(16);
+  const cipher = crypto.createCipheriv("aes-256-cbc", Buffer.from(AES_SECRET_KEY), IV);
+  let encrypted = cipher.update(data, "utf8", "base64");
+  encrypted += cipher.final("base64");
+  return IV.toString("hex") + encrypted;
+};
+
 export const decrypt = (encryptedData) => {
   try {
     if (!encryptedData || typeof encryptedData !== "string") {

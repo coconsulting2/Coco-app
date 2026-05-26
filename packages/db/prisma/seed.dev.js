@@ -3,7 +3,7 @@ import bcrypt from "bcrypt";
 import dotenv from "dotenv";
 import {
     bootstrapOrganizationCatalogs,
-} from "./seedHelpers/bootstrapOrganization.js";
+} from "../src/seedHelpers/bootstrapOrganization.js";
 
 dotenv.config();
 const prisma = new PrismaClient();

@@ -10,5 +10,8 @@
     ".": "./src/index.ts",
     "./accountingCatalogs": "./src/accountingCatalogs.ts",
     "./tenantApplicantCapability": "./src/tenantApplicantCapability.ts"
+  },
+  "imports": {
+    "#/*": "./src/*"
   }
 }

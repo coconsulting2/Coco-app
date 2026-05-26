@@ -8,12 +8,12 @@
  */
 import React, { type ChangeEvent, type RefObject, useEffect, useMemo, useRef, useState } from "react";
 import { useFetcher } from "react-router";
-import CommentMessage from "./CommentMessage";
-import CommentMessageGroup from "./CommentMessageGroup";
-import CommentInput from "./CommentInput";
+import CommentMessage from "~/shared/ui/comments/CommentMessage";
+import CommentMessageGroup from "~/shared/ui/comments/CommentMessageGroup";
+import CommentInput from "~/shared/ui/comments/CommentInput";
 import { groupMessages, formatTime, type ChatGroup } from "~/shared/ui/comments/comments.utils.ts";
 import type { RequestComments } from "~/shared/ui/comments/comments.utils.ts";
-import Error from "./Error.tsx";
+import Error from "~/shared/ui/comments/Error.tsx";
 
 interface CommentsThreadProps {
   requestId: number;

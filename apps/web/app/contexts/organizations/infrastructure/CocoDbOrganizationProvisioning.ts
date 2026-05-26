@@ -1,11 +1,14 @@
 /**
  * @module CocoDbOrganizationProvisioning
  * @description Adapter del puerto `OrganizationProvisioning` sobre los
- * seedHelpers de `@coco/db` (que reciben el PrismaClient). Boundary infra:
- * los helpers son JS sin tipos, por eso se tipan en el límite con un cast
- * controlado a las firmas declaradas localmente (boundary infra tolerable).
+ * seedHelpers tipados de `@coco/db` (que reciben el PrismaClient). Los helpers
+ * ya están tipados (TS), así que se invocan directamente sin casts de boundary.
+ *
+ * Usa `prismaBase` (cliente sin tenant-extension): el bootstrap escribe catálogos
+ * cross-tenant con `organizationId` EXPLÍCITO en cada operación, así que el scoping
+ * por tenant-extension no aplica (e incluso interferiría). RLS a nivel DB sigue vigente.
  */
-import prisma from "~/platform/db/prisma.server.js";
+import { prismaBase } from "@coco/db";
 import {
   bootstrapOrganizationCatalogs,
   ensureOrganizationAdmin,
@@ -15,33 +18,18 @@ import type {
   ProvisionAdminInput,
 } from "~/contexts/organizations/domain/ports/OrganizationProvisioning.js";
 
-type BootstrapFn = (
-  prisma: unknown,
-  organizationId: bigint,
-  opts?: { includeDittaSuperAdmin?: boolean },
-) => Promise<unknown>;
-
-type EnsureAdminFn = (
-  prisma: unknown,
-  organizationId: bigint,
-  params: ProvisionAdminInput,
-) => Promise<unknown>;
-
-const bootstrap = bootstrapOrganizationCatalogs as unknown as BootstrapFn;
-const ensureAdmin = ensureOrganizationAdmin as unknown as EnsureAdminFn;
-
 export class CocoDbOrganizationProvisioning implements OrganizationProvisioning {
   async bootstrapCatalogs(
     organizationId: bigint,
     opts: { includeDittaSuperAdmin?: boolean } = {},
   ): Promise<void> {
-    await bootstrap(prisma, organizationId, opts);
+    await bootstrapOrganizationCatalogs(prismaBase, organizationId, opts);
   }
 
   async ensureAdmin(
     organizationId: bigint,
     input: ProvisionAdminInput,
   ): Promise<void> {
-    await ensureAdmin(prisma, organizationId, input);
+    await ensureOrganizationAdmin(prismaBase, organizationId, input);
   }
 }

@@ -2,12 +2,81 @@
  * @module applicantModel
  * @description Data access layer for applicant-related queries using Prisma.
  */
-/* eslint-disable @typescript-eslint/no-explicit-any */
+import { Prisma, getTenantContext } from "@coco/db";
 import prisma from "~/platform/db/prisma.server.js";
+import type { RouteInput } from "~/contexts/travel-requests/application/applicantService.js";
 import { formatRoutes, getRequestDays, getCountryId, getCityId } from "~/contexts/travel-requests/application/applicantService.js";
 import { createRequestInsertAlert } from "~/contexts/approvals/application/createRequestInsertAlert.js";
 import { buildRequestWorkflowSnapshots, initialStatusFromLevels } from "~/contexts/workflow/index.js";
 import { applyRefundContextToRequest } from "~/contexts/refunds/application/applyRefundContext.js";
+
+/**
+ * Input para crear/editar/borrador de una solicitud de viaje. La ruta
+ * principal embebe los mismos campos que `RouteInput` (el param de
+ * `formatRoutes`), más metadatos de la solicitud y rutas adicionales.
+ */
+export type TravelRequestInput = RouteInput & {
+  notes?: string | null;
+  requested_fee?: number;
+  imposed_fee?: number;
+  additionalRoutes?: RouteInput[];
+};
+
+/** Un receipt de un batch de gastos a insertar. */
+export type ExpenseBatchReceipt = {
+  receipt_type_id: number;
+  request_id: number;
+  amount: number;
+};
+
+/**
+ * Devuelve el `organizationId` del tenant context activo. Es el mismo valor
+ * que el tenantExtension inyectaría en `data` — lo materializamos para que los
+ * `create` queden tipados completos (sin casts) y falle ruidosamente si no hay
+ * tenant scope (estado inválido para una mutación).
+ */
+function requireTenantOrganizationId(): bigint {
+  const ctx = getTenantContext();
+  if (!ctx) {
+    throw new Error("No tenant context active for travel-request mutation");
+  }
+  return ctx.organizationId;
+}
+
+/** FKs de country/city ya resueltos para una ruta. */
+type RouteForeignKeys = {
+  originCountryId: number | null;
+  originCityId: number | null;
+  destCountryId: number | null;
+  destCityId: number | null;
+};
+
+/**
+ * Construye el `data` para `route.create`. Centraliza el mapeo
+ * RouteInput → Prisma usado por create/edit/draft. `organizationId` es
+ * explícito (en vez de delegarlo al tenantExtension) para que el tipo de
+ * Prisma quede completo sin casts.
+ */
+function buildRouteCreateData(
+  organizationId: bigint,
+  route: RouteInput,
+  fks: RouteForeignKeys,
+): Prisma.RouteUncheckedCreateInput {
+  return {
+    organizationId,
+    idOriginCountry: fks.originCountryId,
+    idOriginCity: fks.originCityId,
+    idDestinationCountry: fks.destCountryId,
+    idDestinationCity: fks.destCityId,
+    routerIndex: route.router_index,
+    planeNeeded: route.plane_needed || false,
+    hotelNeeded: route.hotel_needed || false,
+    beginningDate: route.beginning_date ? new Date(route.beginning_date) : null,
+    beginningTime: route.beginning_time ? new Date(`1970-01-01T${route.beginning_time}`) : null,
+    endingDate: route.ending_date ? new Date(route.ending_date) : null,
+    endingTime: route.ending_time ? new Date(`1970-01-01T${route.ending_time}`) : null,
+  };
+}
 
 const Applicant = {
   /**
@@ -73,7 +142,7 @@ const Applicant = {
    * @param {Object} travelDetails - The travel request details including routes
    * @returns {Promise<{requestId: number, message: string}>}
    */
-  async createTravelRequest(userId: number, travelDetails: any) {
+  async createTravelRequest(userId: number, travelDetails: TravelRequestInput) {
     const {
       router_index,
       notes,
@@ -104,13 +173,14 @@ const Applicant = {
 
     const request_days = getRequestDays(allRoutes);
 
-    return await prisma.$transaction(async (tx: any) => {
+    return await prisma.$transaction(async (tx) => {
       const user = await tx.user.findUnique({
         where: { userId: Number(userId) },
         include: { role: true, department: true },
       });
+      if (!user) throw new Error("User not found");
 
-      const destinationCountryIds = [];
+      const destinationCountryIds: number[] = [];
       for (const route of allRoutes) {
         const destCountryId = await getCountryId(tx, route.destination_country_name);
         if (destCountryId != null) destinationCountryIds.push(destCountryId);
@@ -132,11 +202,13 @@ const Applicant = {
       else if (rn === "N2") request_status = 4;
       else throw new Error("User role is not allowed to create a travel request");
 
+      const organizationId = user.organizationId;
       const request = await tx.request.create({
         data: {
+          organizationId,
           userId: Number(userId),
           requestStatusId: request_status,
-          notes,
+          notes: notes ?? null,
           requestedFee: requested_fee,
           imposedFee: imposed_fee,
           requestDays: request_days,
@@ -157,23 +229,17 @@ const Applicant = {
         const destCityId = await getCityId(tx, route.destination_city_name);
 
         const createdRoute = await tx.route.create({
-          data: {
-            idOriginCountry: originCountryId,
-            idOriginCity: originCityId,
-            idDestinationCountry: destCountryId,
-            idDestinationCity: destCityId,
-            routerIndex: route.router_index,
-            planeNeeded: route.plane_needed || false,
-            hotelNeeded: route.hotel_needed || false,
-            beginningDate: route.beginning_date ? new Date(route.beginning_date) : null,
-            beginningTime: route.beginning_time ? new Date(`1970-01-01T${route.beginning_time}`) : null,
-            endingDate: route.ending_date ? new Date(route.ending_date) : null,
-            endingTime: route.ending_time ? new Date(`1970-01-01T${route.ending_time}`) : null,
-          },
+          data: buildRouteCreateData(organizationId, route, {
+            originCountryId,
+            originCityId,
+            destCountryId,
+            destCityId,
+          }),
         });
 
         await tx.routeRequest.create({
           data: {
+            organizationId,
             requestId: request.requestId,
             routeId: createdRoute.routeId,
           },
@@ -183,8 +249,11 @@ const Applicant = {
       // M2-006 — denormaliza tripEndDate y congela política aplicable.
       await applyRefundContextToRequest(tx, request.requestId, {
         costsCenter: user.department?.costsCenter ?? null,
-      }).catch((e) => {
-        console.warn("createTravelRequest: applyRefundContext failed:", e?.message || e);
+      }).catch((e: unknown) => {
+        console.warn(
+          "createTravelRequest: applyRefundContext failed:",
+          e instanceof Error ? e.message : String(e),
+        );
       });
 
       return {
@@ -200,7 +269,7 @@ const Applicant = {
    * @param {Object} travelChanges - The updated travel request details
    * @returns {Promise<{requestId: number, message: string}>}
    */
-  async editTravelRequest(requestId: number, travelChanges: any) {
+  async editTravelRequest(requestId: number, travelChanges: TravelRequestInput) {
     const {
       router_index,
       notes,
@@ -231,12 +300,13 @@ const Applicant = {
 
     const request_days = getRequestDays(allRoutes);
 
-    return await prisma.$transaction(async (tx: any) => {
+    return await prisma.$transaction(async (tx) => {
+      const organizationId = requireTenantOrganizationId();
       // Update the request
       await tx.request.update({
         where: { requestId: Number(requestId) },
         data: {
-          notes,
+          notes: notes ?? null,
           requestedFee: requested_fee,
           imposedFee: imposed_fee,
           requestDays: request_days,
@@ -267,23 +337,17 @@ const Applicant = {
         const destCityId = await getCityId(tx, route.destination_city_name);
 
         const createdRoute = await tx.route.create({
-          data: {
-            idOriginCountry: originCountryId,
-            idOriginCity: originCityId,
-            idDestinationCountry: destCountryId,
-            idDestinationCity: destCityId,
-            routerIndex: route.router_index,
-            planeNeeded: route.plane_needed || false,
-            hotelNeeded: route.hotel_needed || false,
-            beginningDate: route.beginning_date ? new Date(route.beginning_date) : null,
-            beginningTime: route.beginning_time ? new Date(`1970-01-01T${route.beginning_time}`) : null,
-            endingDate: route.ending_date ? new Date(route.ending_date) : null,
-            endingTime: route.ending_time ? new Date(`1970-01-01T${route.ending_time}`) : null,
-          },
+          data: buildRouteCreateData(organizationId, route, {
+            originCountryId,
+            originCityId,
+            destCountryId,
+            destCityId,
+          }),
         });
 
         await tx.routeRequest.create({
           data: {
+            organizationId,
             requestId: Number(requestId),
             routeId: createdRoute.routeId,
           },
@@ -357,10 +421,10 @@ const Applicant = {
       const routes = r.routeRequests.map((rr) => rr.route).filter((rt): rt is NonNullable<typeof rt> => rt !== null);
       return {
         request_id: r.requestId,
-        origin_countries: [...new Set(routes.map((rt: any) => rt.originCountry?.countryName).filter(Boolean))].join(", "),
-        destination_countries: [...new Set(routes.map((rt: any) => rt.destinationCountry?.countryName).filter(Boolean))].join(", "),
-        beginning_dates: [...new Set(routes.map((rt: any) => rt.beginningDate?.toISOString().split("T")[0]).filter(Boolean))].join(", "),
-        ending_dates: [...new Set(routes.map((rt: any) => rt.endingDate?.toISOString().split("T")[0]).filter(Boolean))].join(", "),
+        origin_countries: [...new Set(routes.map((rt) => rt.originCountry?.countryName).filter(Boolean))].join(", "),
+        destination_countries: [...new Set(routes.map((rt) => rt.destinationCountry?.countryName).filter(Boolean))].join(", "),
+        beginning_dates: [...new Set(routes.map((rt) => rt.beginningDate?.toISOString().split("T")[0]).filter(Boolean))].join(", "),
+        ending_dates: [...new Set(routes.map((rt) => rt.endingDate?.toISOString().split("T")[0]).filter(Boolean))].join(", "),
         creation_date: r.creationDate,
         status: r.requestStatus.status,
       };
@@ -506,16 +570,17 @@ const Applicant = {
    * @param {Array<{receipt_type_id: number, request_id: number, amount: number}>} receipts
    * @returns {Promise<number>} Number of inserted rows
    */
-  async createExpenseBatch(receipts: any[]) {
-    const creates = receipts.map((r) =>
-      prisma.receipt.create({
-        data: {
-          receiptTypeId: r.receipt_type_id,
-          requestId: r.request_id,
-          amount: r.amount,
-        } as any,
-      })
-    );
+  async createExpenseBatch(receipts: ExpenseBatchReceipt[]) {
+    const organizationId = requireTenantOrganizationId();
+    const creates = receipts.map((r) => {
+      const data: Prisma.ReceiptUncheckedCreateInput = {
+        organizationId,
+        receiptTypeId: r.receipt_type_id,
+        requestId: r.request_id,
+        amount: r.amount,
+      };
+      return prisma.receipt.create({ data });
+    });
     const results = await prisma.$transaction(creates);
     return results.length;
   },
@@ -526,7 +591,7 @@ const Applicant = {
    * @param {Object} savedDetails - The draft travel request details
    * @returns {Promise<{requestId: number, message: string}>}
    */
-  async createDraftTravelRequest(userId: number, savedDetails: any) {
+  async createDraftTravelRequest(userId: number, savedDetails: TravelRequestInput) {
     const {
       router_index = 0,
       notes = "",
@@ -557,9 +622,11 @@ const Applicant = {
 
     const request_days = getRequestDays(allRoutes);
 
-    return await prisma.$transaction(async (tx: any) => {
+    return await prisma.$transaction(async (tx) => {
+      const organizationId = requireTenantOrganizationId();
       const request = await tx.request.create({
         data: {
+          organizationId,
           userId: Number(userId),
           requestStatusId: 1,
           notes,
@@ -577,23 +644,17 @@ const Applicant = {
         const destCityId = await getCityId(tx, route.destination_city_name);
 
         const createdRoute = await tx.route.create({
-          data: {
-            idOriginCountry: originCountryId,
-            idOriginCity: originCityId,
-            idDestinationCountry: destCountryId,
-            idDestinationCity: destCityId,
-            routerIndex: route.router_index,
-            planeNeeded: route.plane_needed || false,
-            hotelNeeded: route.hotel_needed || false,
-            beginningDate: route.beginning_date ? new Date(route.beginning_date) : null,
-            beginningTime: route.beginning_time ? new Date(`1970-01-01T${route.beginning_time}`) : null,
-            endingDate: route.ending_date ? new Date(route.ending_date) : null,
-            endingTime: route.ending_time ? new Date(`1970-01-01T${route.ending_time}`) : null,
-          },
+          data: buildRouteCreateData(organizationId, route, {
+            originCountryId,
+            originCityId,
+            destCountryId,
+            destCityId,
+          }),
         });
 
         await tx.routeRequest.create({
           data: {
+            organizationId,
             requestId: request.requestId,
             routeId: createdRoute.routeId,
           },
@@ -614,11 +675,12 @@ const Applicant = {
    * @returns {Promise<{requestId: number, message: string}>}
    */
   async confirmDraftTravelRequest(userId: number, requestId: number) {
-    return await prisma.$transaction(async (tx: any) => {
+    return await prisma.$transaction(async (tx) => {
       const user = await tx.user.findUnique({
         where: { userId: Number(userId) },
         include: { role: true, department: true },
       });
+      if (!user) throw new Error("User not found");
 
       const reqRow = await tx.request.findUnique({
         where: { requestId: Number(requestId) },
@@ -633,7 +695,7 @@ const Applicant = {
         throw new Error("Request not found");
       }
 
-      const destinationCountryIds = [];
+      const destinationCountryIds: number[] = [];
       for (const rr of reqRow?.routeRequests || []) {
         const did = rr.route?.idDestinationCountry;
         if (did != null) destinationCountryIds.push(did);
@@ -671,8 +733,11 @@ const Applicant = {
       // M2-006 — denormaliza tripEndDate y congela política aplicable.
       await applyRefundContextToRequest(tx, Number(requestId), {
         costsCenter: user.department?.costsCenter ?? null,
-      }).catch((e) => {
-        console.warn("confirmDraftTravelRequest: applyRefundContext failed:", e?.message || e);
+      }).catch((e: unknown) => {
+        console.warn(
+          "confirmDraftTravelRequest: applyRefundContext failed:",
+          e instanceof Error ? e.message : String(e),
+        );
       });
 
       return {

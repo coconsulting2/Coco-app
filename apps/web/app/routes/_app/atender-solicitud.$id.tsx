@@ -3,10 +3,13 @@
  * @description Pantalla de Agencia para cotizar vuelos y hospedaje vía Duffel
  * y finalizar la atención de la solicitud. Loader: detalle de la Request
  * (necesidades y defaults). Action: discriminado por `intent`
- * (searchFlights | searchHotels | selectFlight | selectHotel | finalize).
+ * (searchFlights | searchHotels | selectFlight | selectHotel |
+ * fetchHotelRates | finalize).
  *
- * Las búsquedas usan `@coco/integrations/duffel` directo; las mutaciones
- * usan use-cases hexagonales (slices flights, hotels, travel-agency).
+ * Las búsquedas y la resolución de tarifas usan los use-cases resilientes de
+ * los slices flights/hotels (fallback a mock en vuelos, 503 tipado en Stays);
+ * las mutaciones usan use-cases hexagonales (slices flights, hotels,
+ * travel-agency).
  */
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { redirect, useLoaderData } from "react-router";
@@ -18,14 +21,19 @@ import {
 } from "~/platform/session/requireUser.server";
 import { assertCsrf } from "~/platform/csrf/csrf.server";
 import {
-  searchFlightOffers,
+  searchFlights,
   selectFlightOffer,
+  FlightsError,
   type NormalizedFlightOffer,
 } from "~/contexts/flights";
 import {
-  searchStays,
+  searchHotels,
+  fetchHotelRates,
   selectStayOffer,
+  HotelsError,
   type NormalizedStayOffer,
+  type EnrichedStayOffer,
+  type HotelSearchOffer,
 } from "~/contexts/hotels";
 import { markAttendedByAgency, TravelAgencyError } from "~/contexts/travel-agency";
 import { getRequestDetail } from "~/contexts/travel-requests/application/applicantQueryService.js";
@@ -100,9 +108,10 @@ export async function loader({ request, params }: LoaderFunctionArgs): Promise<L
 
 export type AttendActionResult =
   | { ok: true; intent: "searchFlights"; offers: NormalizedFlightOffer[] }
-  | { ok: true; intent: "searchHotels"; offers: NormalizedStayOffer[] }
+  | { ok: true; intent: "searchHotels"; offers: HotelSearchOffer[] }
   | { ok: true; intent: "selectFlight" }
   | { ok: true; intent: "selectHotel"; saved: NormalizedStayOffer }
+  | { ok: true; intent: "fetchHotelRates"; offer: EnrichedStayOffer }
   | { ok: false; intent: string; error: string };
 
 function failure(intent: string, error: string, status = 400): Response {
@@ -134,7 +143,7 @@ export async function action({
       const fecha = String(formData.get("fecha") ?? "");
       const fechaRegreso = String(formData.get("fechaRegreso") ?? "").trim();
       const pasajeros = Math.max(1, Number(formData.get("pasajeros") ?? 1) || 1);
-      const offers = await searchFlightOffers({
+      const { offers } = await searchFlights({
         origin: origen,
         destination: destino,
         departureDate: fecha,
@@ -153,7 +162,7 @@ export async function action({
       if (ciudad.length < 2) {
         return failure(intent, "Indica la ciudad (al menos 2 caracteres).");
       }
-      const offers = await searchStays({
+      const { offers } = await searchHotels({
         ciudad,
         fechaEntrada: String(formData.get("fechaEntrada") ?? ""),
         fechaSalida: String(formData.get("fechaSalida") ?? ""),
@@ -191,6 +200,21 @@ export async function action({
       } satisfies AttendActionResult);
     }
 
+    if (intent === "fetchHotelRates") {
+      const searchResultId = String(formData.get("searchResultId") ?? "").trim();
+      if (!searchResultId) {
+        return failure(intent, "Falta el identificador del resultado de búsqueda.");
+      }
+      const offerJson = String(formData.get("offer") ?? "");
+      const baseOffer = JSON.parse(offerJson) as NormalizedStayOffer;
+      const { offer } = await fetchHotelRates({ searchResultId, baseOffer });
+      return Response.json({
+        ok: true,
+        intent: "fetchHotelRates",
+        offer,
+      } satisfies AttendActionResult);
+    }
+
     if (intent === "finalize") {
       await runInRls(session, async () =>
         markAttendedByAgency({ requestId }),
@@ -202,6 +226,9 @@ export async function action({
   } catch (err) {
     if (err instanceof Response) throw err;
     if (err instanceof TravelAgencyError) {
+      return failure(intent, err.message, err.status);
+    }
+    if (err instanceof HotelsError || err instanceof FlightsError) {
       return failure(intent, err.message, err.status);
     }
     const msg = err instanceof Error ? err.message : "No se pudo completar la acción.";

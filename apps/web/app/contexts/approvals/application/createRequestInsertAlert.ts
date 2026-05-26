@@ -4,14 +4,9 @@
  * Debe correr con el mismo client/tx que creó el Request.
  */
 import { findAlertMessageIdForRequestStatus } from "~/contexts/approvals/application/alertMessageResolver.js";
+import type { WebTransactionClient } from "~/platform/db/prisma.server.js";
 
-type Db = Parameters<typeof findAlertMessageIdForRequestStatus>[0] & {
-  alert: {
-    create(args: {
-      data: { requestId: number; messageId: number; organizationId: bigint };
-    }): Promise<unknown>;
-  };
-};
+type Db = Pick<WebTransactionClient, "alert" | "alertMessage">;
 
 export async function createRequestInsertAlert(
   db: Db,

@@ -1,44 +1,49 @@
 /**
  * @module solicitudes-autorizador
- * @description Vista del autorizador con las solicitudes que le competen.
- * Por paridad con el legacy (donde `solicitudes-autorizador.astro` montaba
- * `ApplicantView` — probable bug histórico), exponemos aquí la bandeja
- * de aprobación del autorizador (misma data que `autorizaciones`).
- * Si en Phase 2 se decide semántica distinta (histórico de decisiones,
- * etc.), refactor aquí.
+ * @description Histórico de decisiones del aprobador (N1/N2): las solicitudes
+ * que ÉL ya aprobó / rechazó / reasignó / escaló. NO es la bandeja de
+ * pendientes (eso vive en `autorizaciones`). Loader-driven vía el use-case hex
+ * `listApproverDecisionHistory` del slice approvals; render prop-driven con
+ * `ApproverDecisionHistoryList`.
  */
 import type { LoaderFunctionArgs } from "react-router";
 import { useLoaderData } from "react-router";
 
 import { requirePermissions, runInTenant } from "~/platform/session/requireUser.server";
-import { getApprovalInbox } from "~/contexts/approvals";
-import AuthRequestsList from "~/shared/ui/RequestsLists/AuthRequestsList";
+import { listApproverDecisionHistory } from "~/contexts/approvals";
+import ApproverDecisionHistoryList from "~/shared/ui/RequestsLists/ApproverDecisionHistoryList";
+import type { ApproverDecisionRow } from "~/shared/ui/RequestsLists/ApproverDecisionHistoryList";
 import type { UserRole } from "~/shared/types/roles";
 
 export function meta() {
-  return [{ title: "Solicitudes — CocoConsulting" }];
+  return [{ title: "Mis decisiones — CocoConsulting" }];
+}
+
+function toIso(value: Date | null): string | null {
+  return value ? value.toISOString() : null;
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const session = await requirePermissions(request, "travel_request:authorize");
   const role = session.user.role as UserRole;
-  const statusId: 2 | 3 = role === "N1" ? 2 : 3;
 
-  const inbox = await runInTenant(session, async () =>
-    getApprovalInbox(session.user.user_id, statusId, {
+  const history = await runInTenant(session, async () =>
+    listApproverDecisionHistory(session.user.user_id, {
       organizationId: session.user.organization_id,
       n: null,
     }),
   );
 
-  const rows = inbox.map((r) => ({
-    request_id: r.requestId,
-    request_status: r.requestStatus ?? null,
-    requester_name: r.requesterName ?? null,
-    department_name: r.departmentName ?? null,
-    destination_country: r.destinationCountry,
-    beginning_date: r.beginningDate,
-    ending_date: r.endingDate,
+  const rows: ApproverDecisionRow[] = history.map((h) => ({
+    request_id: h.requestId,
+    action: h.action,
+    decided_at: toIso(h.decidedAt),
+    request_status: h.requestStatus,
+    requester_name: h.requesterName,
+    destination_country: h.destinationCountry,
+    beginning_date: toIso(h.beginningDate),
+    ending_date: toIso(h.endingDate),
+    comentario: h.comentario,
   }));
 
   return { role, rows };
@@ -50,13 +55,15 @@ export default function PageRoute() {
   return (
     <section className="max-w-5xl mx-auto space-y-8">
       <header className="space-y-2">
-        <p className="eyebrow text-xs uppercase tracking-widest text-[var(--color-ink-muted)]">Coco / Mis solicitudes</p>
-        <h1 className="font-serif text-3xl md:text-4xl">Solicitudes asignadas</h1>
+        <p className="eyebrow text-xs uppercase tracking-widest text-[var(--color-ink-muted)]">
+          Coco / Mis decisiones
+        </p>
+        <h1 className="font-serif text-3xl md:text-4xl">Mis decisiones</h1>
         <p className="text-sm text-[var(--color-ink-muted)]">
-          Solicitudes que requieren tu autorización como {role}.
+          Historial de solicitudes que ya resolviste como {role}.
         </p>
       </header>
-      <AuthRequestsList data={rows} role={role} />
+      <ApproverDecisionHistoryList rows={rows} />
     </section>
   );
 }

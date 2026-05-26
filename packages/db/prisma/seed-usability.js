@@ -30,7 +30,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import {
   bootstrapOrganizationCatalogs,
-} from "./seedHelpers/bootstrapOrganization.js";
+} from "../src/seedHelpers/bootstrapOrganization.js";
 // seed-usability importa servicios de apps/web (cross-package). No es un
 // caller idiomático del monorepo — usa paths absolutos del workspace.
 import { buildRequestWorkflowSnapshots } from "../../../apps/web/app/contexts/workflow/index.js";
