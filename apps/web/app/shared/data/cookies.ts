@@ -37,19 +37,6 @@ function emptySession(): Session {
   };
 }
 
-function resolveCookies(): APIContext["cookies"] | null {
-  // RR v7 / SSR: el caller debe pasar cookies explícitamente (no hay globalThis.Astro).
-  if (typeof globalThis.window !== "undefined") {
-    return null;
-  }
-  // Compat: si alguien dejó globalThis.Astro, lo respetamos.
-  const astro = (globalThis as any).Astro;
-  if (astro && astro.cookies && typeof astro.cookies.get === "function") {
-    return astro.cookies;
-  }
-  return null;
-}
-
 /**
  * Lee una cookie del documento (solo navegador). LoginForm escribe `token`, `role`, etc.
  * para que apiRequest y fetch desde islas React puedan enviar Authorization Bearer.
@@ -94,12 +81,10 @@ export function getSession(cookies?: APIContext["cookies"]): Session {
   if (cookies) {
     return getSessionFromAstro(cookies);
   }
+  // En el navegador leemos del document; en SSR el caller debe pasar `cookies`
+  // explícitamente (RR v7 no expone un jar global). Sin ellas → sesión vacía.
   if (typeof globalThis.window !== "undefined") {
     return getSessionFromBrowser();
-  }
-  const astro = resolveCookies();
-  if (astro) {
-    return getSessionFromAstro(astro);
   }
   return emptySession();
 }

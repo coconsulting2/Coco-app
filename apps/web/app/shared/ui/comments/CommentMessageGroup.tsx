@@ -4,7 +4,7 @@
  */
 
 import React from 'react';
-import Avatar from './Avatar';
+import Avatar from "~/shared/ui/comments/Avatar";
 
 interface CommentMessageGroupProps {
   send: boolean;

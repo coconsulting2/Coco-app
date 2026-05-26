@@ -190,6 +190,10 @@ services:
     restart: unless-stopped
     environment:
       NODE_ENV: development
+      # Bind-mount macOS↔Linux no propaga fsevents nativos (watcher daba EINVAL y
+      # los cambios no se reflejaban sin reiniciar). Forzar polling de chokidar/vite.
+      CHOKIDAR_USEPOLLING: "true"
+      CHOKIDAR_INTERVAL: "300"
       HOST: 0.0.0.0
       PORT: "5173"
       DATABASE_URL: postgresql://cocoscheme:cocoscheme_dev@postgres:5432/CocoScheme?schema=public

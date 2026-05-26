@@ -11,6 +11,7 @@ export type {
   EnrichedStay,
   SelectedHotelOffer,
   StaySearchInput,
+  HotelSearchOffer,
   HotelQuote,
 } from "~/contexts/hotels/domain/entities/HotelQuote.js";
 export type { HotelProvider } from "~/contexts/hotels/domain/ports/HotelProvider.js";

@@ -17,6 +17,12 @@ export default defineConfig({
   resolve: {
     alias: {
       "~": resolve(__dirname, "app"),
+      // Workspace packages → TS source (mismo criterio que vite.config + tsconfig
+      // paths). Sin esto, vitest no resuelve los subpaths `@coco/x/...`.
+      "@coco/db": resolve(__dirname, "../../packages/db/src"),
+      "@coco/shared-config": resolve(__dirname, "../../packages/shared-config/src"),
+      "@coco/contracts": resolve(__dirname, "../../packages/contracts/src"),
+      "@coco/integrations": resolve(__dirname, "../../packages/integrations/src"),
       "@coco/ui-kit": resolve(__dirname, "../../packages/ui-kit/src"),
       "@": resolve(__dirname, "app/shared"),
       "@tests": resolve(__dirname, "tests"),

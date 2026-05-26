@@ -9,7 +9,8 @@ import type { LoaderFunctionArgs } from "react-router";
 import { useLoaderData, useRouteLoaderData } from "react-router";
 
 import { requireSession, runInTenant } from "~/platform/session/requireUser.server";
-import { getUserProfile } from "~/contexts/identity";
+import { getUserProfile, listUsersForAdmin } from "~/contexts/identity";
+import type { AdminUserRow } from "~/contexts/identity/interface/views/AdminView";
 import { getApprovalInbox } from "~/contexts/approvals";
 import { listTravelRequestsByDeptStatus } from "~/contexts/travel-requests";
 import Applicant from "~/contexts/travel-requests/infrastructure/applicantModel.js";
@@ -123,10 +124,20 @@ export async function loader({ request }: LoaderFunctionArgs) {
   }
 
   if (role === "Administrador" || role === "Admin Ditta") {
+    const rows = await runInTenant(session, async () => listUsersForAdmin());
+    const users: AdminUserRow[] = rows.map((u) => ({
+      user_id: Number(u.userId),
+      user_name: u.username,
+      email: u.emailDecrypted || u.email,
+      role_name: u.roleName,
+      department_name: u.departmentName,
+      organization_name: u.organizationName,
+    }));
     return {
       kind: "admin" as const,
       userName,
       isRoot: role === "Admin Ditta",
+      users,
     };
   }
 
@@ -158,7 +169,7 @@ export default function DashboardRoute() {
     return <TravelAgencyView userName={data.userName} requests={data.requests} />;
   }
   if (data.kind === "admin") {
-    return <AdminView userName={data.userName} isRoot={data.isRoot} />;
+    return <AdminView userName={data.userName} isRoot={data.isRoot} users={data.users} />;
   }
 
   return (

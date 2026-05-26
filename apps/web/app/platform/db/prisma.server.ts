@@ -40,6 +40,22 @@ if (process.env.NODE_ENV !== "production") {
 export { prisma };
 export default prisma;
 
+/** Tipo del cliente Prisma EXTENDIDO del web app (trigger + tenant). */
+export type WebPrismaClient = typeof prisma;
+
+/**
+ * Cliente disponible dentro de `prisma.$transaction(async (tx) => ...)`: el
+ * client extendido menos los métodos no disponibles en una tx interactiva
+ * (ITXClientDenyList). El client completo `prisma` es asignable a este tipo
+ * (tiene todos los delegates), de modo que helpers tipados con
+ * `Pick<WebTransactionClient, "...">` aceptan tanto el client completo como un
+ * `tx` de transacción.
+ */
+export type WebTransactionClient = Omit<
+  WebPrismaClient,
+  "$connect" | "$disconnect" | "$on" | "$transaction" | "$use" | "$extends"
+>;
+
 // Re-exports de conveniencia para los archivos infrastructure/* que aún
 // importan helpers desde `~/platform/db/prisma.server`. Después de M8 (todo
 // .js → .ts) los call-sites pueden importar directo de @coco/db.

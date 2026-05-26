@@ -8,11 +8,11 @@ import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { useLoaderData } from "react-router";
 
 import { requirePermissions } from "~/platform/session/requireUser.server";
-import {
-  handleSubirComprobanteAction,
-  type SubmitComprobanteActionResult,
-  type PolicyPreviewResult,
-} from "~/routes/_app/subir-comprobante.$id";
+import { handleSubirComprobanteAction } from "~/routes/_app/subir-comprobante.server";
+import type {
+  SubmitComprobanteActionResult,
+  PolicyPreviewResult,
+} from "~/shared/types/comprobante";
 import ExpensesForm from "~/shared/ui/ExpensesForm";
 
 export type { SubmitComprobanteActionResult, PolicyPreviewResult };
@@ -23,7 +23,8 @@ export function meta() {
 
 export async function loader({ request, params }: LoaderFunctionArgs) {
   await requirePermissions(request, "expense:submit");
-  return { requestId: Number(params.id), resubmit: true };
+  const receiptToReplace = new URL(request.url).searchParams.get("replace");
+  return { requestId: Number(params.id), resubmit: true, receiptToReplace };
 }
 
 export async function action({ request, params }: ActionFunctionArgs): Promise<Response> {
@@ -41,7 +42,11 @@ export default function PageRoute() {
         </p>
         <h1 className="font-serif text-3xl md:text-4xl">Resubir comprobante</h1>
       </header>
-      <ExpensesForm requestId={data.requestId} resubmit={data.resubmit} />
+      <ExpensesForm
+        requestId={data.requestId}
+        resubmit={data.resubmit}
+        receiptToReplace={data.receiptToReplace}
+      />
     </section>
   );
 }

@@ -10,9 +10,9 @@ function getSubpath(params: { "*"?: string }): string {
 }
 
 export async function loader({ request, params }: LoaderFunctionArgs) {
-  return dispatchWorkflowRulesApi({ request, subpath: getSubpath(params as any) });
+  return dispatchWorkflowRulesApi({ request, subpath: getSubpath(params) });
 }
 
 export async function action({ request, params }: ActionFunctionArgs) {
-  return dispatchWorkflowRulesApi({ request, subpath: getSubpath(params as any) });
+  return dispatchWorkflowRulesApi({ request, subpath: getSubpath(params) });
 }

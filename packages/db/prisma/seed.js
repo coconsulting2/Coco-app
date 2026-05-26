@@ -16,7 +16,7 @@
  */
 import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcrypt";
-import { bootstrapOrganizationCatalogs, ensureOrganizationAdmin } from "./seedHelpers/bootstrapOrganization.js";
+import { bootstrapOrganizationCatalogs, ensureOrganizationAdmin } from "../src/seedHelpers/bootstrapOrganization.js";
 
 const prisma = new PrismaClient();
 const isDev = process.argv.includes("dev");

@@ -38,21 +38,19 @@ export {
 
 // Re-export del helper de runtime que vive en seedHelpers (capability merge
 // "Solicitante" por tenant — usado por permission-service y por seeds).
-// @ts-ignore — JS module pendiente migración
 export {
   ensureApplicantGroupsForRole,
   APPLICANT_DEFAULT_GROUP_NAMES,
-} from "../prisma/seedHelpers/applicantRoleGroups.js";
+} from "#/seedHelpers/applicantRoleGroups.js";
 
 // Bootstrap helpers de organización (usados por organizationService al
 // crear orgs nuevas, además del seed inicial).
-// @ts-ignore — JS module
 export {
   bootstrapOrganizationCatalogs,
   ensureOrganizationAdmin,
   getDefaultClientRoleNamesForOnboardingImport,
   getDefaultRolePreviewPermissionCodes,
-} from "../prisma/seedHelpers/bootstrapOrganization.js";
+} from "#/seedHelpers/bootstrapOrganization.js";
 
 // Re-export Prisma namespace + generated types for convenience.
 export { Prisma } from "@prisma/client";
@@ -91,4 +89,5 @@ export type {
   OrganizationIntegration,
   NotificationTemplate,
   ApiKey,
+  ValidationStatus,
 } from "@prisma/client";

@@ -2,8 +2,45 @@
  * @module gastoTramoModel
  * @description Data access para `gasto_tramo`: liga receipts a route segments.
  */
-/* eslint-disable @typescript-eslint/no-explicit-any */
+import { getTenantContext, type ValidationStatus } from "@coco/db";
 import prisma from "~/platform/db/prisma.server.js";
+
+/**
+ * Devuelve el `organizationId` del tenant context activo (el mismo que el
+ * tenantExtension inyectaría). Lo materializamos para tipar el `create` sin
+ * casts; falla ruidosamente si no hay tenant scope.
+ */
+function requireTenantOrganizationId(): bigint {
+  const ctx = getTenantContext();
+  if (!ctx) {
+    throw new Error("No tenant context active for gasto_tramo mutation");
+  }
+  return ctx.organizationId;
+}
+
+/** Un comprobante (receipt) ligado a un tramo, ya aplanado para la UI. */
+export interface ResumenComprobante {
+  gasto_tramo_id: number;
+  receipt_id: number;
+  receipt_type: string | null;
+  amount: number;
+  validation: ValidationStatus;
+  submission_date: Date;
+}
+
+/** Resumen de un tramo (route) con sus comprobantes y total. */
+export interface ResumenTramo {
+  tramo_id: number | null;
+  router_index: number | null;
+  origin_country: string | null;
+  origin_city: string | null;
+  destination_country: string | null;
+  destination_city: string | null;
+  beginning_date: Date | null;
+  ending_date: Date | null;
+  comprobantes: ResumenComprobante[];
+  total_tramo: number;
+}
 
 const GastoTramo = {
   async createGastoTramo(
@@ -11,7 +48,7 @@ const GastoTramo = {
     routeId: number,
     receiptId: number,
   ): Promise<{ gastoTramoId: number; message: string }> {
-    return await prisma.$transaction(async (tx: any) => {
+    return await prisma.$transaction(async (tx) => {
       const request = await tx.request.findUnique({
         where: { requestId: Number(requestId) },
         select: { requestId: true },
@@ -39,6 +76,7 @@ const GastoTramo = {
 
       const gastoTramo = await tx.gastoTramo.create({
         data: {
+          organizationId: requireTenantOrganizationId(),
           requestId: Number(requestId),
           routeId: Number(routeId),
           receiptId: Number(receiptId),
@@ -54,7 +92,7 @@ const GastoTramo = {
 
   async getResumenTramos(requestId: number): Promise<{
     viaje_id: number;
-    tramos: any[];
+    tramos: ResumenTramo[];
     total_general: number;
   }> {
     const request = await prisma.request.findUnique({
@@ -85,9 +123,9 @@ const GastoTramo = {
     });
 
     let totalGeneral = 0;
-    const tramos = routeRequests.map((rr: any) => {
+    const tramos: ResumenTramo[] = routeRequests.map((rr) => {
       const route = rr.route;
-      const comprobantes = (route?.gastoTramos ?? []).map((gt: any) => ({
+      const comprobantes: ResumenComprobante[] = (route?.gastoTramos ?? []).map((gt) => ({
         gasto_tramo_id: gt.gastoTramoId,
         receipt_id: gt.receiptId,
         receipt_type: gt.receipt?.receiptType?.receiptTypeName ?? null,
@@ -97,7 +135,7 @@ const GastoTramo = {
       }));
 
       const totalTramo = comprobantes.reduce(
-        (sum: number, c: { amount: number }) => sum + c.amount,
+        (sum, c) => sum + c.amount,
         0,
       );
       totalGeneral += totalTramo;

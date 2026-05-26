@@ -94,6 +94,8 @@ export default [
     route("travel-agent/*", "routes/api/travel-agent.$.tsx"),
     route("comprobantes/*", "routes/api/comprobantes.$.tsx"),
     route("viajes/*", "routes/api/viajes.$.tsx"),
+    route("accounts-payable/*", "routes/api/accounts-payable.$.tsx"),
+    route("files/*", "routes/api/files.$.tsx"),
     // Fase 5
     route("notifications/*", "routes/api/notifications.$.tsx"),
     route("policies/*", "routes/api/policies.$.tsx"),

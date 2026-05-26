@@ -43,7 +43,7 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
   const receipts = await runInTenant(session, async () =>
     getReceiptsForRequestValidation({ requestId }),
   );
-  return { receipts };
+  return { requestId, receipts };
 }
 
 export type SubmitValidationActionResult =
@@ -97,7 +97,8 @@ export async function action({
 }
 
 export default function PageRoute() {
-  const { receipts } = useLoaderData() as {
+  const { requestId, receipts } = useLoaderData() as {
+    requestId: number;
     receipts: RequestReceiptsForValidation | null;
   };
 
@@ -109,7 +110,7 @@ export default function PageRoute() {
         </p>
         <h1 className="font-serif text-3xl md:text-4xl">Validar comprobantes</h1>
       </header>
-      <RequestValidationStatus receipts={receipts} />
+      <RequestValidationStatus requestId={requestId} receipts={receipts} />
     </section>
   );
 }

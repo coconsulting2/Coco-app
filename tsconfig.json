@@ -1,6 +1,7 @@
 {
   "files": [],
   "references": [
+    { "path": "./packages/shared-config" },
     { "path": "./packages/db" },
     { "path": "./packages/contracts" },
     { "path": "./packages/integrations" },

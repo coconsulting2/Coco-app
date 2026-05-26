@@ -5,7 +5,8 @@
  */
 import AccountsPayable from "~/contexts/accounts-payable/infrastructure/accountsPayableModel.js";
 import anticipoPolizaLifecycleService from "~/contexts/accounts-payable/application/anticipoPolizaLifecycleService";
-import { AccountsPayableError } from "~/contexts/accounts-payable/domain/errors";
+import { confirmImposedFee } from "~/contexts/accounts-payable/application/confirmImposedFee.js";
+import { PrismaCxpAttendRepository } from "~/contexts/accounts-payable/infrastructure/PrismaCxpAttendRepository.js";
 
 /** Resultado de evaluar los recibos de una solicitud. */
 export interface ValidateReceiptsResult {
@@ -21,59 +22,33 @@ export interface AttendTravelRequestResult {
   newStatus: number;
 }
 
-/** True si la lista CSV (hotel/avión) incluye un "1" (servicio requerido). */
-function csvListNeedsService(csv: string | null | undefined): boolean {
-  if (!csv || typeof csv !== "string") return false;
-  return csv
-    .split(",")
-    .map((s) => s.trim())
-    .includes("1");
-}
+const cxpAttendRepo = new PrismaCxpAttendRepository();
 
 /**
  * Atiende una solicitud (status 4 → agencia/CxP) fijando el imposed_fee y
  * avanzando el estatus: a status 5 si requiere hotel/avión, si no a status 6.
- * Réplica de `accountsPayableController.attendTravelRequest` sin HTTP/email.
  *
- * @throws {AccountsPayableError} 404 si no existe o no es atendible; 400 si falla el update.
+ * Delega en el use-case hexagonal canónico `confirmImposedFee` (port + adapter
+ * Prisma) para no duplicar la lógica de transición. Conservado únicamente como
+ * shim del dispatcher legacy `PUT attend-travel-request/:id`.
+ *
+ * @throws {CxpRequestNotFoundError} 404 si la Request no existe.
+ * @throws {CxpRequestNotAttendableError} 404 si la Request no está en status 4.
  */
 async function attendTravelRequest(
   requestId: number,
   imposedFee: number,
 ): Promise<AttendTravelRequestResult> {
-  const request = await AccountsPayable.requestExists(requestId);
-  if (!request) {
-    throw new AccountsPayableError("Travel request not found", "NOT_FOUND", 404);
-  }
-
-  if (request.request_status_id !== 4) {
-    throw new AccountsPayableError(
-      "This request cannot be attended by accounts payable",
-      "INVALID_STATUS",
-      404,
-    );
-  }
-
-  const newStatus =
-    csvListNeedsService(request.hotel_needed_list) ||
-    csvListNeedsService(request.plane_needed_list)
-      ? 5
-      : 6;
-
-  const updated = await AccountsPayable.attendTravelRequest(requestId, imposedFee, newStatus);
-  if (!updated) {
-    throw new AccountsPayableError(
-      "Failed to update travel request status",
-      "UPDATE_FAILED",
-      400,
-    );
-  }
+  const { newStatusId } = await confirmImposedFee(
+    { requestId, imposedFee },
+    { attendRepo: cxpAttendRepo },
+  );
 
   return {
     message: "Travel request status updated successfully",
     requestId,
     imposedFee,
-    newStatus,
+    newStatus: newStatusId,
   };
 }
 

@@ -6,6 +6,7 @@
  */
 import Applicant from "~/contexts/travel-requests/infrastructure/applicantModel.js";
 import { findByCfdiUuid } from "~/contexts/receipts-cfdi/application/cfdiQueryService.js";
+import type { WebTransactionClient } from "~/platform/db/prisma.server.js";
 
 export type RouteInput = {
   router_index?: number;
@@ -13,10 +14,10 @@ export type RouteInput = {
   origin_city_name?: string;
   destination_country_name?: string;
   destination_city_name?: string;
-  beginning_date?: string;
-  beginning_time?: string;
-  ending_date?: string;
-  ending_time?: string;
+  beginning_date?: string | null;
+  beginning_time?: string | null;
+  ending_date?: string | null;
+  ending_time?: string | null;
   plane_needed?: boolean;
   hotel_needed?: boolean;
 };
@@ -206,7 +207,7 @@ export const createExpenseValidationBatch = async (
 };
 
 export const getCountryId = async (
-  tx: { country: { upsert(args: unknown): Promise<{ countryId: number }> } },
+  tx: Pick<WebTransactionClient, "country">,
   countryName: string | undefined | null,
 ): Promise<number | null> => {
   if (!countryName) return null;
@@ -219,7 +220,7 @@ export const getCountryId = async (
 };
 
 export const getCityId = async (
-  tx: { city: { upsert(args: unknown): Promise<{ cityId: number }> } },
+  tx: Pick<WebTransactionClient, "city">,
   cityName: string | undefined | null,
 ): Promise<number | null> => {
   if (!cityName) return null;

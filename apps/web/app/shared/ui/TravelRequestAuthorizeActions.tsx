@@ -13,9 +13,6 @@ import { getButtonClasses } from "~/shared/types/button";
 
 interface Props {
   request_id: number;
-  /** Detalle opcional para mostrar contexto (el route padre lo carga en loader). */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  request?: any;
 }
 
 type FetcherActionResult =

@@ -1,45 +1,102 @@
 /**
  * @module perfil-usuario
- * @description Perfil del usuario autenticado. Loader llama el use-case
- * `getUserProfile` del slice identity directamente — sin round-trip a /api.
+ * @description Perfil del usuario autenticado. Loader llama los use-cases
+ * `getUserProfile` (identity) + `getNotificationPreferences`/`getVapidPublicKey`
+ * (notifications) del slice directamente — sin round-trip a /api. La `action`
+ * expone los intents `save-preferences` y `subscribe-push` (`assertCsrf` +
+ * runInTenant → use-cases) que `NotificationPreferences` postea vía useFetcher.
  */
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { redirect, useLoaderData } from "react-router";
 
 import { requireSession, runInTenant } from "~/platform/session/requireUser.server";
 import { buildLogoutCookies } from "~/platform/session/session.server";
+import { assertCsrf, issueCsrfToken } from "~/platform/csrf/csrf.server";
 import { getUserProfile, UserNotFoundError } from "~/contexts/identity";
+import {
+  getNotificationPreferences,
+  getVapidPublicKey,
+  setNotificationPreferences,
+  subscribePush,
+} from "~/contexts/notifications";
+import type {
+  NotificationPreferencesPatch,
+  WebPushSubscription,
+} from "~/contexts/notifications";
+import NotificationPreferences from "~/shared/ui/NotificationPreferences";
 
 export function meta() {
   return [{ title: "Perfil — CocoConsulting" }];
 }
 
-export async function loader({ request }: LoaderFunctionArgs) {
+type ProfileShape = {
+  user_name: string;
+  email: string | null;
+  phone_number: string | null;
+  workstation: string | null;
+  no_empleado: string | null;
+  department_name: string | null;
+  costs_center: string | null;
+  creation_date: Date | string | null;
+  role_name: string;
+};
+
+type LoaderData = {
+  profile: ProfileShape | null;
+  prefs: { emailNotif: boolean; appNotif: boolean; browserNotif: boolean };
+  vapidPublicKey: string;
+  csrfToken: string;
+};
+
+export async function loader({ request }: LoaderFunctionArgs): Promise<Response> {
   const session = await requireSession(request);
+  const csrf = issueCsrfToken(request);
+
+  let profile: ProfileShape | null = null;
+  let prefs = { emailNotif: true, appNotif: true, browserNotif: true };
+
   try {
-    const profile = await runInTenant(session, async () =>
-      getUserProfile(session.user.user_id),
-    );
+    const result = await runInTenant(session, async () => {
+      const p = await getUserProfile(session.user.user_id);
+      const pr = await getNotificationPreferences(session.user.user_id);
+      return { p, pr };
+    });
     // Wire shape para el componente (snake_case por compatibilidad con el legacy).
-    return {
-      profile: {
-        user_name: profile.username,
-        email: profile.email,
-        phone_number: profile.phoneNumber,
-        workstation: profile.workstation,
-        no_empleado: profile.employeeNumber,
-        department_name: profile.departmentName,
-        costs_center: profile.costsCenter,
-        creation_date: profile.creationDate,
-        role_name: profile.roleName,
-      },
+    profile = {
+      user_name: result.p.username,
+      email: result.p.email,
+      phone_number: result.p.phoneNumber,
+      workstation: result.p.workstation,
+      no_empleado: result.p.employeeNumber,
+      department_name: result.p.departmentName,
+      costs_center: result.p.costsCenter,
+      creation_date: result.p.creationDate,
+      role_name: result.p.roleName,
+    };
+    prefs = {
+      emailNotif: result.pr.emailNotif,
+      appNotif: result.pr.appNotif,
+      browserNotif: result.pr.browserNotif,
     };
   } catch (err) {
-    if (err instanceof UserNotFoundError) {
-      return { profile: null };
-    }
-    throw err;
+    if (!(err instanceof UserNotFoundError)) throw err;
+    profile = null;
   }
+
+  const vapidPublicKey = getVapidPublicKey();
+  const payload: LoaderData = { profile, prefs, vapidPublicKey, csrfToken: csrf.token };
+  return new Response(JSON.stringify(payload), {
+    status: 200,
+    headers: { "content-type": "application/json", "set-cookie": csrf.setCookie },
+  });
+}
+
+function parseBoolField(value: FormDataEntryValue | null): boolean | undefined {
+  if (value === null) return undefined;
+  const s = String(value);
+  if (s === "true") return true;
+  if (s === "false") return false;
+  return undefined;
 }
 
 export async function action({ request }: ActionFunctionArgs) {
@@ -50,11 +107,51 @@ export async function action({ request }: ActionFunctionArgs) {
     headers.set("location", "/login");
     return new Response(null, { status: 302, headers });
   }
+
+  const session = await requireSession(request);
+  await assertCsrf(request);
+  const form = await request.formData();
+  const intent = String(form.get("_intent") ?? "");
+
+  if (intent === "save-preferences") {
+    const patch: NotificationPreferencesPatch = {};
+    const email = parseBoolField(form.get("emailNotif"));
+    const app = parseBoolField(form.get("appNotif"));
+    const browser = parseBoolField(form.get("browserNotif"));
+    if (email !== undefined) patch.emailNotif = email;
+    if (app !== undefined) patch.appNotif = app;
+    if (browser !== undefined) patch.browserNotif = browser;
+    const updated = await runInTenant(session, async () =>
+      setNotificationPreferences(session.user.user_id, patch),
+    );
+    return { ok: true, intent, prefs: updated };
+  }
+
+  if (intent === "subscribe-push") {
+    const raw = form.get("subscription");
+    if (raw === null) {
+      return { ok: false, error: "subscription requerida" };
+    }
+    let subscription: WebPushSubscription;
+    try {
+      subscription = JSON.parse(String(raw)) as WebPushSubscription;
+    } catch {
+      return { ok: false, error: "subscription inválida" };
+    }
+    if (!subscription?.endpoint || !subscription.keys?.p256dh || !subscription.keys?.auth) {
+      return { ok: false, error: "subscription inválida" };
+    }
+    await runInTenant(session, async () =>
+      subscribePush(session.user.user_id, subscription),
+    );
+    return { ok: true, intent };
+  }
+
   return redirect("/perfil-usuario");
 }
 
 export default function PerfilRoute() {
-  const data = useLoaderData() as Awaited<ReturnType<typeof loader>>;
+  const data = useLoaderData() as LoaderData;
   const profile = data.profile;
   if (!profile) {
     return (
@@ -88,6 +185,17 @@ export default function PerfilRoute() {
           value={profile.creation_date ? formatDate(profile.creation_date) : "—"}
         />
       </dl>
+
+      <section className="card-editorial bg-white border border-[var(--color-neutral-200,#e5e7eb)] rounded-lg p-6">
+        <h2 className="font-editorial text-lg font-normal text-[var(--color-ink)] mb-5">
+          Preferencias de notificación
+        </h2>
+        <NotificationPreferences
+          prefs={data.prefs}
+          vapidPublicKey={data.vapidPublicKey}
+          csrfToken={data.csrfToken}
+        />
+      </section>
     </section>
   );
 }

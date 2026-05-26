@@ -10,9 +10,9 @@ function getSubpath(params: { "*"?: string }): string {
 }
 
 export async function loader({ request, params }: LoaderFunctionArgs) {
-  return dispatchViaticosPolicyApi({ request, subpath: getSubpath(params as any) });
+  return dispatchViaticosPolicyApi({ request, subpath: getSubpath(params) });
 }
 
 export async function action({ request, params }: ActionFunctionArgs) {
-  return dispatchViaticosPolicyApi({ request, subpath: getSubpath(params as any) });
+  return dispatchViaticosPolicyApi({ request, subpath: getSubpath(params) });
 }

@@ -1,4 +1,4 @@
-import type { TravelRoute } from './TravelRoute';
+import type { TravelRoute } from "~/shared/types/TravelRoute";
 
 export interface FormData {
   router_index: number;

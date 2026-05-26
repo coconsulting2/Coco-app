@@ -5,30 +5,39 @@
  * (use-case hex `cancelTravelRequest`). Sin llamadas al API legacy ni token.
  */
 import { useEffect, useState } from "react";
-import { useFetcher } from "react-router";
+import { useFetcher, useRevalidator } from "react-router";
 import Modal from "~/shared/ui/Modal";
 
 interface Props {
   id: number;
   disabled?: boolean;
+  /**
+   * Action de PÁGINA destino (no `/api`). Permite montar el modal en una vista
+   * (p.ej. dashboard del solicitante) y enrutar la cancelación a la action de
+   * otra ruta de página — `/detalles-solicitud/:id` — que ya implementa el
+   * intent `cancel` con CSRF + RLS. Si se omite, submitea a la ruta actual.
+   */
+  action?: string;
   children: React.ReactNode;
 }
 
 type FetcherResult = { ok: true } | { ok: false; error: string; code?: string };
 
-export default function CancelRequestModal({ id, disabled = false, children }: Props) {
+export default function CancelRequestModal({ id, disabled = false, action, children }: Props) {
   const [isOpen, setIsOpen] = useState(false);
   const fetcher = useFetcher<FetcherResult>();
+  const revalidator = useRevalidator();
 
   useEffect(() => {
     if (fetcher.state !== "idle" || !fetcher.data) return;
     setIsOpen(false);
-  }, [fetcher.state, fetcher.data]);
+    if (fetcher.data.ok) revalidator.revalidate();
+  }, [fetcher.state, fetcher.data, revalidator]);
 
   const cancelRequest = () => {
     fetcher.submit(
       { intent: "cancel", requestId: String(id) },
-      { method: "post" },
+      action ? { method: "post", action } : { method: "post" },
     );
   };
 

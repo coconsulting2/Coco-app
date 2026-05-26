@@ -10,6 +10,7 @@ import EditorialHeader from "~/shared/ui/editorial/EditorialHeader";
 import MetricCard from "~/shared/ui/editorial/MetricCard";
 import Button from "~/shared/ui/Button";
 import MaterialIcon from "~/shared/ui/MaterialIcon";
+import CancelRequestModal from "~/shared/ui/CancelRequestModal";
 
 type RequestRow = {
   request_id: number;
@@ -137,13 +138,15 @@ export default function ApplicantView({ userName, requests }: Props) {
                       </Link>
                     )}
                     {!isNotCancelable && (
-                      <Link
-                        to={`/detalles-solicitud/${r.request_id}`}
-                        aria-label="Ver detalles para cancelar"
-                        className="p-1.5 rounded-[var(--radius-md)] text-[var(--color-ink-muted)] hover:bg-accent-50 hover:text-accent-400 transition-colors cursor-pointer"
+                      <CancelRequestModal
+                        id={r.request_id}
+                        disabled={isNotCancelable}
+                        action={`/detalles-solicitud/${r.request_id}`}
                       >
-                        <MaterialIcon icon="delete" color="currentColor" />
-                      </Link>
+                        <div className="p-1.5 rounded-[var(--radius-md)] text-[var(--color-ink-muted)] hover:bg-accent-50 hover:text-accent-400 transition-colors cursor-pointer">
+                          <MaterialIcon icon="delete" color="currentColor" />
+                        </div>
+                      </CancelRequestModal>
                     )}
                   </div>
                 </div>

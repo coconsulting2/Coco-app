@@ -23,7 +23,7 @@ import { CONCEPTO_OPTIONS } from "~/shared/ui/SubmitTravelWarper";
 import type {
   PolicyPreviewResult,
   SubmitComprobanteActionResult,
-} from "~/routes/_app/subir-comprobante.$id";
+} from "~/shared/types/comprobante";
 
 interface Props {
   requestId: number;

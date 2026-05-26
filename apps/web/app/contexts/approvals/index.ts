@@ -14,6 +14,12 @@ export type {
   ApprovalInboxQueryOpts,
 } from "~/contexts/approvals/domain/ports/ApprovalInboxQueries.js";
 export type {
+  ApproverDecisionHistoryQueries,
+  ApproverDecisionHistoryItem,
+  ApproverDecisionHistoryOpts,
+  ApproverDecisionAction,
+} from "~/contexts/approvals/domain/ports/ApproverDecisionHistoryQueries.js";
+export type {
   AuthorizerRepository,
   RequestAuthorizationContext,
   WorkflowPreSnapshot,
@@ -42,6 +48,7 @@ export {
 
 // ── Composition root (default deps) ───────────────────────────────────────
 import { PrismaApprovalInboxQueries } from "~/contexts/approvals/infrastructure/PrismaApprovalInboxQueries.js";
+import { PrismaApproverDecisionHistoryQueries } from "~/contexts/approvals/infrastructure/PrismaApproverDecisionHistoryQueries.js";
 import { PrismaAuthorizerRepository } from "~/contexts/approvals/infrastructure/PrismaAuthorizerRepository.js";
 import {
   WorkflowRulesAdapter,
@@ -51,11 +58,13 @@ import {
 } from "~/contexts/approvals/infrastructure/legacyAdapters.js";
 
 import * as getApprovalInboxModule from "~/contexts/approvals/application/getApprovalInbox.js";
+import * as listApproverDecisionHistoryModule from "~/contexts/approvals/application/listApproverDecisionHistory.js";
 import * as authorizeModule from "~/contexts/approvals/application/authorizeTravelRequest.js";
 import * as rejectModule from "~/contexts/approvals/application/rejectTravelRequest.js";
 import * as reassignModule from "~/contexts/approvals/application/reassignApproval.js";
 
 const defaultInboxQueries = new PrismaApprovalInboxQueries();
+const defaultDecisionHistoryQueries = new PrismaApproverDecisionHistoryQueries();
 const defaultAuthorizerRepo = new PrismaAuthorizerRepository();
 const defaultWorkflowRules = new WorkflowRulesAdapter();
 const defaultPolicyExceptions = new LegacyPolicyExceptionAdapter();
@@ -71,6 +80,14 @@ export const getApprovalInbox = (
 ) =>
   getApprovalInboxModule.getApprovalInbox(actorUserId, statusId, opts, {
     inboxQueries: defaultInboxQueries,
+  });
+
+export const listApproverDecisionHistory = (
+  approverUserId: number,
+  opts: import("~/contexts/approvals/domain/ports/ApproverDecisionHistoryQueries.js").ApproverDecisionHistoryOpts = {},
+) =>
+  listApproverDecisionHistoryModule.listApproverDecisionHistory(approverUserId, opts, {
+    historyQueries: defaultDecisionHistoryQueries,
   });
 
 export const authorizeTravelRequest = (input: authorizeModule.AuthorizeTravelRequestInput) =>
@@ -119,6 +136,8 @@ export { createRequestInsertAlert } from "~/contexts/approvals/application/creat
 // ── Raw use-cases (para tests + composiciones custom) ────────────────────
 export const usecases = {
   getApprovalInbox: getApprovalInboxModule.getApprovalInbox,
+  listApproverDecisionHistory:
+    listApproverDecisionHistoryModule.listApproverDecisionHistory,
   authorizeTravelRequest: authorizeModule.authorizeTravelRequest,
   rejectTravelRequest: rejectModule.rejectTravelRequest,
   reassignApproval: reassignModule.reassignApproval,
@@ -126,6 +145,7 @@ export const usecases = {
 
 export const adapters = {
   ApprovalInboxQueries: PrismaApprovalInboxQueries,
+  ApproverDecisionHistoryQueries: PrismaApproverDecisionHistoryQueries,
   AuthorizerRepository: PrismaAuthorizerRepository,
   WorkflowRulesPort: WorkflowRulesAdapter,
   PolicyExceptionPort: LegacyPolicyExceptionAdapter,
